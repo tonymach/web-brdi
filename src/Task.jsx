@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ExclamationTriangleIcon } from '@radix-ui/react-icons';
 import confetti from 'canvas-confetti';
+import Calibration from './Calibration';
 
 const GAME_SIZE = 350;
 const TARGET_SIZE = 30;
@@ -19,6 +20,7 @@ const TARGET_DELAY = 1000;
 const TRIALS_PER_CONDITION = 5;
 
 const VELOCITY_THRESHOLD = 50; // pixels/second for movement initiation
+const CREDIT_CARD_LENGTH_MM = 85.6;  // Define the constant here
 
 const euclideanDistance = (p1, p2) => 
   Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
@@ -64,6 +66,10 @@ export default function CognitiveMotorTask() {
   const velocities = useRef([]);
   const accelerations = useRef([]);
   const [showStartPosition, setShowStartPosition] = useState(true);
+
+  const [showCalibration, setShowCalibration] = useState(false);
+  const [pixelsPerMM, setPixelsPerMM] = useState(null);
+  const [isCalibrated, setIsCalibrated] = useState(false);
 
 
   const conditions = [
@@ -174,6 +180,7 @@ export default function CognitiveMotorTask() {
       return;
     }
     setIsFormSubmitted(true);
+
     if (userType === 'participant') {
       const availableConditions = getAvailableConditions();
       setCurrentCondition(0);
@@ -237,6 +244,22 @@ export default function CognitiveMotorTask() {
     ) {
       handleHit();
     }
+  };
+
+  const handleCalibrationComplete = (calculatedPixelsPerMM) => {
+    setPixelsPerMM(calculatedPixelsPerMM);
+    setIsCalibrated(true);
+    if (userType === 'participant') {
+      const availableConditions = getAvailableConditions();
+      setCurrentCondition(0);
+      setIsMirrorMode(availableConditions[0].mirror);
+      setIsDecoupledMode(availableConditions[0].decoupled);
+    }
+    setMessage(userType === 'participant' ? 'Task started. Move the cursor to the green circle to begin.' : 'Researcher mode activated. All controls are available.');
+  };
+
+  const startCalibration = () => {
+    setShowCalibration(true);
   };
 
   const handleHit = () => {
@@ -467,13 +490,34 @@ export default function CognitiveMotorTask() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="submit" className="w-full">Start Task</Button>
+              <Button type="submit" className="w-full">Submit</Button>
+
             </form>
+            
           </CardContent>
         </Card>
       </div>
     );
   }
+
+  if (isFormSubmitted && !isCalibrated) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <Card className="w-[400px]">
+          <CardHeader>
+            <CardTitle>Calibration</CardTitle>
+          </CardHeader>
+          <CardContent>
+          <Calibration 
+                onCalibrationComplete={handleCalibrationComplete} 
+                creditCardLength={CREDIT_CARD_LENGTH_MM}  // Pass the constant as a prop
+              />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
 
   if (isTaskComplete) {
     return (
