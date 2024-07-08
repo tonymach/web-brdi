@@ -11,6 +11,10 @@ export default defineConfig(({ command }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    base: isProduction ? '/web-brdi/' : '/',  // Use your repository name here
+    base: '/',
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
+    }
   }
 })
