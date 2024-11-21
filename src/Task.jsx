@@ -13,14 +13,15 @@ const GAME_SIZE = 350;
 const TARGET_SIZE = 30;
 const CURSOR_SIZE = 15;
 const CENTER_THRESHOLD = 10;
-const EDGE_BUFFER = 10; // New constant for buffer from edges
+const EDGE_BUFFER = 10;
 const START_POSITION = { x: GAME_SIZE / 2 - CURSOR_SIZE / 2, y: GAME_SIZE / 2 - CURSOR_SIZE / 2 };
 const COLLECTION_INTERVAL = 10;
-const TARGET_DELAY = 1000;
-const TRIALS_PER_CONDITION = 5;
+const TARGET_DELAY = 500; // Changed to 500ms as requested
+const DEFAULT_TRIALS = 20; // Default number of trials
 
 const VELOCITY_THRESHOLD = 50; // pixels/second for movement initiation
-const CREDIT_CARD_LENGTH_MM = 85.6;  // Define the constant here
+const STOPPING_THRESHOLD = 10; // pixels/second for considering movement stopped
+const CREDIT_CARD_LENGTH_MM = 85.6;
 
 const euclideanDistance = (p1, p2) => 
   Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
@@ -28,13 +29,22 @@ const euclideanDistance = (p1, p2) =>
 const calculateVelocity = (p1, p2, timeDiff) => 
   euclideanDistance(p1, p2) / (timeDiff / 1000);
 
+
+// URL parameter handling
+const getUrlParams = () => {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    trials: parseInt(params.get('trials')) || DEFAULT_TRIALS,
+    conditions: params.get('conditions')?.split(',') || ['regular', 'mirror', 'decoupled', 'decoupledMirror']
+  };
+};
+
 const TARGET_POSITIONS = {
   top: { x: GAME_SIZE / 2 - TARGET_SIZE / 2, y: EDGE_BUFFER },
   bottom: { x: GAME_SIZE / 2 - TARGET_SIZE / 2, y: GAME_SIZE - TARGET_SIZE - EDGE_BUFFER },
   left: { x: EDGE_BUFFER, y: GAME_SIZE / 2 - TARGET_SIZE / 2 },
   right: { x: GAME_SIZE - TARGET_SIZE - EDGE_BUFFER, y: GAME_SIZE / 2 - TARGET_SIZE / 2 },
 };
-
 
 export default function CognitiveMotorTask() {
   const [participantId, setParticipantId] = useState('');
@@ -54,7 +64,12 @@ export default function CognitiveMotorTask() {
   const [message, setMessage] = useState(null);
   const [kinematicMetrics, setKinematicMetrics] = useState({
     reactionTime: [], movementTime: [], peakVelocity: [], timeTopeakVelocity: [],
-    pathLength: [], directnessRatio: [], movementVariability: [], endpointError: [], movementUnits: []
+    pathLength: [], directnessRatio: [], movementVariability: [], endpointError: [], movementUnits: [],
+    ballisticMovementTime: [], ballisticPathLength: [], correctiveMovements: [],
+    directionReversals: [], absoluteError: [], variableError: [],
+    fullPathLength: [], percentageDirectionReversals: [],
+    movementType: []
+
   });
   const [currentCondition, setCurrentCondition] = useState(0);
   const [trialsCompleted, setTrialsCompleted] = useState(0);
@@ -71,13 +86,25 @@ export default function CognitiveMotorTask() {
   const [pixelsPerMM, setPixelsPerMM] = useState(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
 
+  const [urlParams] = useState(getUrlParams());
+  const TRIALS_PER_CONDITION = urlParams.trials;
 
-  const conditions = [
-    { name: 'Regular', mirror: false, decoupled: false },
-    { name: 'Mirror', mirror: true, decoupled: false },
-    { name: 'Decoupled', mirror: false, decoupled: true, requiresTouchscreen: true },
-    { name: 'Decoupled Mirror', mirror: true, decoupled: true, requiresTouchscreen: true }
-  ];
+  // Modified conditions based on URL parameters
+  const conditions = urlParams.conditions.map(condition => {
+    switch(condition.toLowerCase()) {
+      case 'regular':
+        return { name: 'Regular', mirror: false, decoupled: false };
+      case 'mirror':
+        return { name: 'Mirror', mirror: true, decoupled: false };
+      case 'decoupled':
+        return { name: 'Decoupled', mirror: false, decoupled: true, requiresTouchscreen: true };
+      case 'decoupledmirror':
+        return { name: 'Decoupled Mirror', mirror: true, decoupled: true, requiresTouchscreen: true };
+      default:
+        return null;
+    }
+  }).filter(Boolean);
+
 
   const getAvailableConditions = () => {
     return conditions.filter(condition => !condition.requiresTouchscreen || inputDevice === 'touchscreen');
@@ -102,7 +129,6 @@ export default function CognitiveMotorTask() {
     return () => clearInterval(intervalId);
   }, [gameState, cursorPos]);
 
-
   const updateKinematicData = (newPos) => {
     const dt = (newPos.time - lastPos.current.time) / 1000; // Time step in seconds
     const velocity = calculateVelocity(lastPos.current, newPos, newPos.time - lastPos.current.time);
@@ -125,16 +151,34 @@ export default function CognitiveMotorTask() {
   
     const reactionTime = currentPath[movementStartIndex]?.time || 0;
     const movementTime = currentPath[currentPath.length - 1].time - reactionTime;
+    const movementType = isMirrorMode ? 'Mirrored' : 'Direct';
+
+    // Calculate ballistic movement time and path length
+    let ballisticEndIndex = movementStartIndex;
+    for (let i = movementStartIndex + 1; i < currentPath.length; i++) {
+      const velocity = calculateVelocity(currentPath[i-1], currentPath[i], currentPath[i].time - currentPath[i-1].time);
+      if (velocity < STOPPING_THRESHOLD) {
+        ballisticEndIndex = i;
+        break;
+      }
+    }
+    const ballisticMovementTime = currentPath[ballisticEndIndex].time - reactionTime;
+    
+    let fullPathLength = 0;
+    let ballisticPathLength = 0;
+    for (let i = 1; i < currentPath.length; i++) {
+      const segmentLength = euclideanDistance(currentPath[i-1], currentPath[i]);
+      fullPathLength += segmentLength;
+      if (i <= ballisticEndIndex) {
+        ballisticPathLength += segmentLength;
+      }
+    }
+    
     const peakVelocity = Math.max(...velocities.current);
     const timeTopeakVelocity = velocities.current.indexOf(peakVelocity) * COLLECTION_INTERVAL;
     
-    let pathLength = 0;
-    for (let i = 1; i < currentPath.length; i++) {
-      pathLength += euclideanDistance(currentPath[i-1], currentPath[i]);
-    }
-  
     const startToEndDistance = euclideanDistance(currentPath[0], currentPath[currentPath.length - 1]);
-    const directnessRatio = startToEndDistance / pathLength;
+    const directnessRatio = startToEndDistance / fullPathLength;
   
     const avgX = currentPath.reduce((sum, pos) => sum + pos.x, 0) / currentPath.length;
     const avgY = currentPath.reduce((sum, pos) => sum + pos.y, 0) / currentPath.length;
@@ -145,25 +189,62 @@ export default function CognitiveMotorTask() {
     const endpointError = euclideanDistance(currentPath[currentPath.length - 1], targetPos);
   
     let movementUnits = 1;
+    let correctiveMovements = 0;
+    let directionReversals = 0;
     for (let i = 1; i < accelerations.current.length; i++) {
       if (accelerations.current[i-1] < 0 && accelerations.current[i] > 0) {
         movementUnits++;
+        correctiveMovements++;
+      }
+      if ((velocities.current[i-1].x * velocities.current[i].x < 0) ||
+          (velocities.current[i-1].y * velocities.current[i].y < 0)) {
+        directionReversals++;
       }
     }
-  
+
+    const percentageDirectionReversals = (directionReversals / currentPath.length) * 100;
+    
+    // Calculate absolute error (distance from target center)
+    const absoluteError = endpointError;
+    
+    // Calculate variable error (standard deviation of endpoint positions)
+    const endX = currentPath[currentPath.length - 1].x;
+    const endY = currentPath[currentPath.length - 1].y;
+    const prevEndpoints = kinematicMetrics.endpointError.map((_, index) => ({
+      x: currentPath[currentPath.length - 1].x,
+      y: currentPath[currentPath.length - 1].y
+    }));
+    prevEndpoints.push({ x: endX, y: endY });
+    const avgEndX = prevEndpoints.reduce((sum, pos) => sum + pos.x, 0) / prevEndpoints.length;
+    const avgEndY = prevEndpoints.reduce((sum, pos) => sum + pos.y, 0) / prevEndpoints.length;
+    const variableError = Math.sqrt(
+      prevEndpoints.reduce((sum, pos) => 
+        sum + Math.pow(pos.x - avgEndX, 2) + Math.pow(pos.y - avgEndY, 2), 0
+      ) / prevEndpoints.length
+    );
+
     setKinematicMetrics(prevMetrics => ({
       reactionTime: [...prevMetrics.reactionTime, reactionTime],
       movementTime: [...prevMetrics.movementTime, movementTime],
       peakVelocity: [...prevMetrics.peakVelocity, peakVelocity],
       timeTopeakVelocity: [...prevMetrics.timeTopeakVelocity, timeTopeakVelocity],
-      pathLength: [...prevMetrics.pathLength, pathLength],
+      pathLength: [...prevMetrics.pathLength, fullPathLength],
       directnessRatio: [...prevMetrics.directnessRatio, directnessRatio],
       movementVariability: [...prevMetrics.movementVariability, movementVariability],
       endpointError: [...prevMetrics.endpointError, endpointError],
       movementUnits: [...prevMetrics.movementUnits, movementUnits],
+      ballisticMovementTime: [...prevMetrics.ballisticMovementTime, ballisticMovementTime],
+      ballisticPathLength: [...prevMetrics.ballisticPathLength, ballisticPathLength],
+      correctiveMovements: [...prevMetrics.correctiveMovements, correctiveMovements],
+      directionReversals: [...prevMetrics.directionReversals, directionReversals],
+      absoluteError: [...prevMetrics.absoluteError, absoluteError],
+      variableError: [...prevMetrics.variableError, variableError],
+      fullPathLength: [...prevMetrics.fullPathLength, fullPathLength],
+      percentageDirectionReversals: [...prevMetrics.percentageDirectionReversals, percentageDirectionReversals],
+      movementType: [...prevMetrics.movementType, movementType]
+
     }));
   };
-
 
   const handleFormSubmit = (e) => {
     e.preventDefault();
@@ -220,12 +301,12 @@ export default function CognitiveMotorTask() {
     );
   };
 
-  const showRandomTarget = () => {
+ const showRandomTarget = () => {
     const positions = Object.keys(TARGET_POSITIONS);
     const randomPosition = positions[Math.floor(Math.random() * positions.length)];
     setTarget(randomPosition);
     setGameState('active');
-    setShowStartPosition(false); // Hide the start position
+    setShowStartPosition(false);
     startTimeRef.current = Date.now();
     lastCollectionTime.current = startTimeRef.current;
     setCurrentPath([]);
@@ -274,31 +355,31 @@ export default function CognitiveMotorTask() {
     setTarget(null);
     setGameState('waiting');
     setCursorPos(START_POSITION);
-    setShowStartPosition(true); // Show the start position again
+    setShowStartPosition(true);
   
-  if (userType === 'participant') {
-    setTrialsCompleted(prev => {
-      const newTrialsCompleted = prev + 1;
-      if (newTrialsCompleted === TRIALS_PER_CONDITION) {
-        const availableConditions = getAvailableConditions();
-        if (currentCondition < availableConditions.length - 1) {
-          const nextCondition = currentCondition + 1;
-          setCurrentCondition(nextCondition);
-          setTrialsCompleted(0);
-          setIsMirrorMode(availableConditions[nextCondition].mirror);
-          setIsDecoupledMode(availableConditions[nextCondition].decoupled);
-        } else {
-          setIsTaskComplete(true);
-          confetti({
-            particleCount: 100,
-            spread: 70,
-            origin: { y: 0.6 }
-          });
+    if (userType === 'participant') {
+      setTrialsCompleted(prev => {
+        const newTrialsCompleted = prev + 1;
+        if (newTrialsCompleted === TRIALS_PER_CONDITION) {
+          const availableConditions = getAvailableConditions();
+          if (currentCondition < availableConditions.length - 1) {
+            const nextCondition = currentCondition + 1;
+            setCurrentCondition(nextCondition);
+            setTrialsCompleted(0);
+            setIsMirrorMode(availableConditions[nextCondition].mirror);
+            setIsDecoupledMode(availableConditions[nextCondition].decoupled);
+          } else {
+            setIsTaskComplete(true);
+            confetti({
+              particleCount: 100,
+              spread: 70,
+              origin: { y: 0.6 }
+            });
+          }
         }
-      }
-      return newTrialsCompleted;
-    });
-  }
+        return newTrialsCompleted;
+      });
+    }
 
     setMessage(userType === 'participant' ? `Trial complete. ${TRIALS_PER_CONDITION - trialsCompleted - 1} trials left in this condition.` : 'Target hit! Move back to the center to continue.');
   };
@@ -360,7 +441,7 @@ export default function CognitiveMotorTask() {
           }}
         />
       )}
-      {isTopBox && showStartPosition && ( // Only show when showStartPosition is true
+      {isTopBox && showStartPosition && (
         <div
           className="absolute bg-green-500 rounded-full"
           style={{
@@ -379,39 +460,59 @@ export default function CognitiveMotorTask() {
       <h3 className="font-bold mb-2">Kinematic Metrics (Averages):</h3>
       <p>Reaction Time: {average(kinematicMetrics.reactionTime).toFixed(2)} ms</p>
       <p>Movement Time: {average(kinematicMetrics.movementTime).toFixed(2)} ms</p>
+      <p>Ballistic Movement Time: {average(kinematicMetrics.ballisticMovementTime).toFixed(2)} ms</p>
       <p>Peak Velocity: {average(kinematicMetrics.peakVelocity).toFixed(2)} px/s</p>
       <p>Time to Peak Velocity: {average(kinematicMetrics.timeTopeakVelocity).toFixed(2)} ms</p>
-      <p>Path Length: {average(kinematicMetrics.pathLength).toFixed(2)} px</p>
+      <p>Full Path Length: {average(kinematicMetrics.fullPathLength).toFixed(2)} px</p>
+      <p>Ballistic Path Length: {average(kinematicMetrics.ballisticPathLength).toFixed(2)} px</p>
       <p>Directness Ratio: {average(kinematicMetrics.directnessRatio).toFixed(2)}</p>
       <p>Movement Variability: {average(kinematicMetrics.movementVariability).toFixed(2)} px</p>
       <p>Endpoint Error: {average(kinematicMetrics.endpointError).toFixed(2)} px</p>
       <p>Movement Units: {average(kinematicMetrics.movementUnits).toFixed(2)}</p>
+      <p>Corrective Movements: {average(kinematicMetrics.correctiveMovements).toFixed(2)}</p>
+      <p>Direction Reversals: {average(kinematicMetrics.directionReversals).toFixed(2)}</p>
+      <p>Percentage Direction Reversals: {average(kinematicMetrics.percentageDirectionReversals).toFixed(2)}%</p>
+      <p>Absolute Error: {average(kinematicMetrics.absoluteError).toFixed(2)} px</p>
+      <p>Variable Error: {average(kinematicMetrics.variableError).toFixed(2)} px</p>
+      <p>Current Mode: {isMirrorMode ? 'Mirrored' : 'Direct'}</p>
+      <p>Movement Types: {kinematicMetrics.movementType.join(', ')}</p>
     </div>
   );
 
-  const average = (arr) => arr.length ? arr.reduce((a, b) => a + b) /arr.length : 0;
+  const average = (arr) => arr.length ? arr.reduce((a, b) => a + b) / arr.length : 0;
 
   const exportData = () => {
-    // Create the main data CSV content
     const mainCsvContent = [
       ['Participant ID', participantId],
       ['Input Device', inputDevice],
-      ['Trial', 'Reaction Time (ms)', 'Movement Time (ms)', 'Peak Velocity (px/s)', 'Time to Peak Velocity (ms)', 'Path Length (px)', 'Directness Ratio', 'Movement Variability (px)', 'Endpoint Error (px)', 'Movement Units'],
+      ['Trial', 'Reaction Time (ms)', 'Movement Time (ms)', 'Ballistic Movement Time (ms)', 
+       'Peak Velocity (px/s)', 'Time to Peak Velocity (ms)', 'Full Path Length (px)', 
+       'Ballistic Path Length (px)', 'Directness Ratio', 'Movement Variability (px)', 
+       'Endpoint Error (px)', 'Movement Units', 'Corrective Movements', 'Direction Reversals', 
+       'Percentage Direction Reversals (%)', 'Absolute Error (px)', 'Variable Error (px)',
+       'Movement Type'],
       ...kinematicMetrics.reactionTime.map((_, index) => [
         index + 1,
         kinematicMetrics.reactionTime[index],
         kinematicMetrics.movementTime[index],
+        kinematicMetrics.ballisticMovementTime[index],
         kinematicMetrics.peakVelocity[index],
         kinematicMetrics.timeTopeakVelocity[index],
-        kinematicMetrics.pathLength[index],
+        kinematicMetrics.fullPathLength[index],
+        kinematicMetrics.ballisticPathLength[index],
         kinematicMetrics.directnessRatio[index],
         kinematicMetrics.movementVariability[index],
         kinematicMetrics.endpointError[index],
-        kinematicMetrics.movementUnits[index]
+        kinematicMetrics.movementUnits[index],
+        kinematicMetrics.correctiveMovements[index],
+        kinematicMetrics.directionReversals[index],
+        kinematicMetrics.percentageDirectionReversals[index],
+        kinematicMetrics.absoluteError[index],
+        kinematicMetrics.variableError[index],
+        kinematicMetrics.movementType[index]
       ])
     ].map(row => row.join(',')).join('\n');
 
-    // Create the raw path data CSV content
     const rawPathCsvContent = paths.map((path, trialIndex) => {
       const trialData = [
         `Trial ${trialIndex + 1}`,
@@ -423,10 +524,8 @@ export default function CognitiveMotorTask() {
       return trialData.join('\n');
     }).join('\n\n');
 
-    // Combine both CSVs
     const fullCsvContent = `${mainCsvContent}\n\nRaw Path Data:\n${rawPathCsvContent}`;
 
-    // Create and trigger download
     const blob = new Blob([fullCsvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     if (link.download !== undefined) {
@@ -491,9 +590,7 @@ export default function CognitiveMotorTask() {
                 </Select>
               </div>
               <Button type="submit" className="w-full">Submit</Button>
-
             </form>
-            
           </CardContent>
         </Card>
       </div>
@@ -508,16 +605,15 @@ export default function CognitiveMotorTask() {
             <CardTitle>Calibration</CardTitle>
           </CardHeader>
           <CardContent>
-          <Calibration 
-                onCalibrationComplete={handleCalibrationComplete} 
-                creditCardLength={CREDIT_CARD_LENGTH_MM}  // Pass the constant as a prop
-              />
+            <Calibration 
+              onCalibrationComplete={handleCalibrationComplete} 
+              creditCardLength={CREDIT_CARD_LENGTH_MM}
+            />
           </CardContent>
         </Card>
       </div>
     );
   }
-
 
   if (isTaskComplete) {
     return (
@@ -542,14 +638,14 @@ export default function CognitiveMotorTask() {
           <CardTitle>Cognitive Motor Task</CardTitle>
         </CardHeader>
         <CardContent>
-        <div className="h-[100px] mb-4"> {/* Fixed height container for messages */}
+          <div className="h-[100px] mb-4">
             {message && (
               <Alert>
                 <AlertDescription>{message}</AlertDescription>
               </Alert>
             )}
           </div>
-          <div className="mb-4"> {/* Container for game area */}
+          <div className="mb-4">
             {isDecoupledMode ? (
               <>
                 {renderGameArea(true)}
@@ -558,11 +654,12 @@ export default function CognitiveMotorTask() {
             ) : (
               <div ref={gameRef}>{renderGameArea()}</div>
             )}
-          </div>
-          {userType === 'participant' ? (
+            </div>
+            {userType === 'participant' ? (
             <div className="mt-4">
-            <p>Current Condition: {getAvailableConditions()[currentCondition].name}</p>
-            <p>Trials Completed: {trialsCompleted} / {TRIALS_PER_CONDITION}</p>
+              <p>Current Condition: {getAvailableConditions()[currentCondition]?.name}</p>
+              <p>Trials Completed: {trialsCompleted} / {TRIALS_PER_CONDITION}</p>
+              <p>Available Conditions: {conditions.map(c => c.name).join(', ')}</p>
             </div>
           ) : (
             <>
