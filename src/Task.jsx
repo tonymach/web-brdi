@@ -18,6 +18,8 @@ const START_POSITION = { x: GAME_SIZE / 2 - CURSOR_SIZE / 2, y: GAME_SIZE / 2 - 
 const COLLECTION_INTERVAL = 10;
 const TARGET_DELAY = 500; // Changed to 500ms as requested
 const DEFAULT_TRIALS = 20; // Default number of trials
+const HOLD_DURATION = 500; // 500ms hold requirement
+
 
 const VELOCITY_THRESHOLD = 50; // pixels/second for movement initiation
 const STOPPING_THRESHOLD = 10; // pixels/second for considering movement stopped
@@ -30,20 +32,24 @@ const calculateVelocity = (p1, p2, timeDiff) =>
   euclideanDistance(p1, p2) / (timeDiff / 1000);
 
 
+const calculateProgress = (startTime) => {
+  if (!startTime) return 0;
+  const elapsed = Date.now() - startTime;
+  return Math.min(elapsed / HOLD_DURATION, 1);
+};
+
 // URL parameter handling
 const getUrlParams = () => {
   // Try to get params from both regular URL and hash
   const urlParams = new URLSearchParams(window.location.search);
   const hashParams = new URLSearchParams(window.location.hash.split('?')[1] || '');
   
-  // Use URL params first, then hash params, then defaults
-  const trials = parseInt(urlParams.get('trials')) || 
-                 parseInt(hashParams.get('trials')) || 
-                 DEFAULT_TRIALS;
+  // Get params from URL or hash, whichever has them
+  const params = urlParams.get('conditions') ? urlParams : hashParams;
   
-  const conditions = urlParams.get('conditions')?.split(',') || 
-                    hashParams.get('conditions')?.split(',') || 
-                    ['regular', 'mirror', 'decoupled', 'decoupledMirror'];
+  const trials = parseInt(params.get('trials')) || DEFAULT_TRIALS;
+  const conditionsStr = params.get('conditions') || 'regular,mirror,decoupled,decoupledMirror';
+  const conditions = conditionsStr.toLowerCase().split(',').map(c => c.trim());
   
   console.log('Parsed URL params:', { trials, conditions }); // For debugging
   return { trials, conditions };
@@ -72,6 +78,7 @@ export default function CognitiveMotorTask() {
   const [currentPath, setCurrentPath] = useState([]);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
+  
   const [kinematicMetrics, setKinematicMetrics] = useState({
     reactionTime: [], movementTime: [], peakVelocity: [], timeTopeakVelocity: [],
     pathLength: [], directnessRatio: [], movementVariability: [], endpointError: [], movementUnits: [],
@@ -91,6 +98,8 @@ export default function CognitiveMotorTask() {
   const velocities = useRef([]);
   const accelerations = useRef([]);
   const [showStartPosition, setShowStartPosition] = useState(true);
+  const [holdStartTime, setHoldStartTime] = useState(null);
+  const [holdProgress, setHoldProgress] = useState(0);
 
   const [showCalibration, setShowCalibration] = useState(false);
   const [pixelsPerMM, setPixelsPerMM] = useState(null);
@@ -99,7 +108,6 @@ export default function CognitiveMotorTask() {
   const [urlParams] = useState(getUrlParams());
   const TRIALS_PER_CONDITION = urlParams.trials;
 
-  // Modified conditions based on URL parameters
   const conditions = urlParams.conditions.map(condition => {
     switch(condition.toLowerCase()) {
       case 'regular':
@@ -109,16 +117,51 @@ export default function CognitiveMotorTask() {
       case 'decoupled':
         return { name: 'Decoupled', mirror: false, decoupled: true, requiresTouchscreen: true };
       case 'decoupledmirror':
+      case 'decoupled_mirror': // Add support for different separator
+      case 'decoupled-mirror': // Add support for different separator
         return { name: 'Decoupled Mirror', mirror: true, decoupled: true, requiresTouchscreen: true };
       default:
+        console.log('Unknown condition:', condition);
         return null;
     }
   }).filter(Boolean);
+  
+  // Add this check for empty conditions
+  if (conditions.length === 0) {
+    console.warn('No valid conditions found, using defaults');
+    conditions.push(
+      { name: 'Regular', mirror: false, decoupled: false }
+    );
+  }
 
 
   const getAvailableConditions = () => {
     return conditions.filter(condition => !condition.requiresTouchscreen || inputDevice === 'touchscreen');
   };
+
+  useEffect(() => {
+    let animationFrame;
+    
+    const updateProgress = () => {
+      if (holdStartTime) {
+        setHoldProgress(calculateProgress(holdStartTime));
+        animationFrame = requestAnimationFrame(updateProgress);
+      } else {
+        setHoldProgress(0);
+      }
+    };
+  
+    if (holdStartTime) {
+      animationFrame = requestAnimationFrame(updateProgress);
+    }
+  
+    return () => {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+      }
+    };
+  }, [holdStartTime]);
+
 
   useEffect(() => {
     if (gameState === 'active' && target) {
@@ -327,13 +370,25 @@ export default function CognitiveMotorTask() {
 
   const checkCollision = () => {
     const targetPos = TARGET_POSITIONS[target];
-    if (
+    const isOverTarget = (
       cursorPos.x < targetPos.x + TARGET_SIZE &&
       cursorPos.x + CURSOR_SIZE > targetPos.x &&
       cursorPos.y < targetPos.y + TARGET_SIZE &&
       cursorPos.y + CURSOR_SIZE > targetPos.y
-    ) {
-      handleHit();
+    );
+  
+    if (isOverTarget) {
+      if (!holdStartTime) {
+        // Just started holding on target
+        setHoldStartTime(Date.now());
+      } else if (Date.now() - holdStartTime >= HOLD_DURATION) {
+        // Successfully held for required duration
+        handleHit();
+        setHoldStartTime(null); // Reset hold timer
+      }
+    } else {
+      // Left target area, reset hold timer
+      setHoldStartTime(null);
     }
   };
 
@@ -396,6 +451,7 @@ export default function CognitiveMotorTask() {
 
   const handleMouseLeave = () => {
     if (gameState === 'active') {
+      setHoldStartTime(null); // Reset hold timer
       setStats(prevStats => ({
         ...prevStats,
         misses: prevStats.misses + 1
@@ -429,17 +485,43 @@ export default function CognitiveMotorTask() {
       onMouseLeave={handleMouseLeave}
     >
       {showPaths && renderPaths()}
-      {isTopBox && target && (
-        <div
-          className="absolute bg-red-500 rounded-full"
-          style={{
-            width: TARGET_SIZE,
-            height: TARGET_SIZE,
-            left: TARGET_POSITIONS[target].x,
-            top: TARGET_POSITIONS[target].y,
-          }}
-        />
-      )}
+{isTopBox && target && (
+  <div className="absolute" style={{
+    width: TARGET_SIZE,
+    height: TARGET_SIZE,
+    left: TARGET_POSITIONS[target].x,
+    top: TARGET_POSITIONS[target].y,
+  }}>
+    {/* Background circle */}
+    <div className={`absolute rounded-full transition-colors duration-200 ${
+      holdStartTime ? 'bg-yellow-500' : 'bg-red-500'
+    }`}
+    style={{
+      width: '100%',
+      height: '100%',
+    }} />
+    
+    {/* Progress ring */}
+    <svg
+      className="absolute top-0 left-0"
+      width={TARGET_SIZE}
+      height={TARGET_SIZE}
+      viewBox={`0 0 ${TARGET_SIZE} ${TARGET_SIZE}`}
+      style={{ transform: 'rotate(-90deg)' }}
+    >
+      <circle
+        cx={TARGET_SIZE / 2}
+        cy={TARGET_SIZE / 2}
+        r={(TARGET_SIZE / 2) - 2}
+        fill="none"
+        stroke="#22c55e"
+        strokeWidth="2"
+        strokeDasharray={`${2 * Math.PI * ((TARGET_SIZE / 2) - 2)}`}
+        strokeDashoffset={`${(1 - holdProgress) * 2 * Math.PI * ((TARGET_SIZE / 2) - 2)}`}
+      />
+    </svg>
+  </div>
+)}
       {(!isDecoupledMode || isTopBox) && (
         <div
           className="absolute bg-blue-500 rounded-full"

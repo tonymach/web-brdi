@@ -64,7 +64,7 @@ export default function URLGenerator() {
             </div>
 
             <div>
-              <Label>Number of Trials</Label>
+              <Label>Number of Trials Per Condition</Label>
               <Input
                 type="number"
                 min="1"
