@@ -11,7 +11,7 @@ export default defineConfig(({ command }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    base: './',
+    base: isProduction ? '/web-brdi/' : './',
     build: {
       outDir: 'dist',
       assetsDir: 'assets',
