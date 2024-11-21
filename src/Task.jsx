@@ -32,11 +32,21 @@ const calculateVelocity = (p1, p2, timeDiff) =>
 
 // URL parameter handling
 const getUrlParams = () => {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    trials: parseInt(params.get('trials')) || DEFAULT_TRIALS,
-    conditions: params.get('conditions')?.split(',') || ['regular', 'mirror', 'decoupled', 'decoupledMirror']
-  };
+  // Try to get params from both regular URL and hash
+  const urlParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.split('?')[1] || '');
+  
+  // Use URL params first, then hash params, then defaults
+  const trials = parseInt(urlParams.get('trials')) || 
+                 parseInt(hashParams.get('trials')) || 
+                 DEFAULT_TRIALS;
+  
+  const conditions = urlParams.get('conditions')?.split(',') || 
+                    hashParams.get('conditions')?.split(',') || 
+                    ['regular', 'mirror', 'decoupled', 'decoupledMirror'];
+  
+  console.log('Parsed URL params:', { trials, conditions }); // For debugging
+  return { trials, conditions };
 };
 
 const TARGET_POSITIONS = {

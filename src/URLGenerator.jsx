@@ -15,19 +15,23 @@ export default function URLGenerator() {
     decoupledMirror: false
   });
   const [trials, setTrials] = useState(20);
-  const [baseUrl, setBaseUrl] = useState('');
+  const [baseUrl, setBaseUrl] = useState('https://tonymach.github.io/web-brdi');
   const [copied, setCopied] = useState(false);
 
   const generateURL = () => {
     const selectedConditions = Object.entries(conditions)
       .filter(([_, isSelected]) => isSelected)
       .map(([condition]) => condition);
-
+  
     const params = new URLSearchParams();
     params.set('trials', trials.toString());
     params.set('conditions', selectedConditions.join(','));
-
-    return `${baseUrl}?${params.toString()}`;
+  
+    // Support both hash and regular routing
+    const isGitHubPages = baseUrl.includes('github.io');
+    return isGitHubPages ? 
+      `${baseUrl}#/?${params.toString()}` : 
+      `${baseUrl}?${params.toString()}`;
   };
 
   const copyToClipboard = async (text) => {
