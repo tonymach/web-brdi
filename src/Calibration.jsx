@@ -4,7 +4,7 @@ import { Slider } from "@/components/ui/slider";
 
 const Calibration = ({ onCalibrationComplete, creditCardLength }) => {
   const [calibrationValue, setCalibrationValue] = useState(300);
-  
+
   const handleCalibrationComplete = () => {
     const calculatedPixelsPerMM = calibrationValue / creditCardLength;
     onCalibrationComplete(calculatedPixelsPerMM);

@@ -1,0 +1,117 @@
+Motor Control Analysis Report
+===========================
+
+Session Summary
+--------------
+Total Trials: 6
+Valid Trials: 4
+High Quality Trials: 0
+Mean Quality Score: 0.700
+
+Trial Details
+------------
+
+Trial 1:
+Valid: No
+Quality Score: 0.000
+Issues:
+- Reaction time too fast: 95.0ms
+- Path too indirect: 0.448
+Metrics:
+- Reaction Time: 95.0 ms
+- Movement Time: 2264.0 ms
+- Peak Velocity: 1398.5 px/s
+- Path Length: 342.7 px
+- Directness Ratio: 0.448
+- Movement Units: 6
+- Corrective Movements: 16
+
+Trial 2:
+Valid: Yes
+Quality Score: 0.820
+Metrics:
+- Reaction Time: 376.0 ms
+- Movement Time: 1196.0 ms
+- Peak Velocity: 1551.6 px/s
+- Path Length: 147.7 px
+- Directness Ratio: 0.995
+- Movement Units: 3
+- Corrective Movements: 8
+
+Trial 3:
+Valid: No
+Quality Score: 0.000
+Issues:
+- Reaction time too fast: 45.0ms
+Metrics:
+- Reaction Time: 45.0 ms
+- Movement Time: 1315.0 ms
+- Peak Velocity: 1600.1 px/s
+- Path Length: 153.2 px
+- Directness Ratio: 0.936
+- Movement Units: 2
+- Corrective Movements: 10
+
+Trial 4:
+Valid: Yes
+Quality Score: 0.646
+Metrics:
+- Reaction Time: 543.0 ms
+- Movement Time: 2074.0 ms
+- Peak Velocity: 1295.2 px/s
+- Path Length: 130.8 px
+- Directness Ratio: 0.987
+- Movement Units: 2
+- Corrective Movements: 6
+
+Trial 5:
+Valid: No
+Quality Score: 0.000
+Issues:
+- Movement time too fast: 97.0ms
+Metrics:
+- Reaction Time: 381.0 ms
+- Movement Time: 97.0 ms
+- Peak Velocity: 2108.9 px/s
+- Path Length: 160.1 px
+- Directness Ratio: 0.998
+- Movement Units: 1
+- Corrective Movements: 1
+
+Trial 6:
+Valid: Yes
+Quality Score: 0.619
+Metrics:
+- Reaction Time: 298.0 ms
+- Movement Time: 2643.0 ms
+- Peak Velocity: 987.1 px/s
+- Path Length: 160.5 px
+- Directness Ratio: 0.972
+- Movement Units: 4
+- Corrective Movements: 10
+
+Trial 7:
+Valid: No
+Quality Score: 0.000
+Issues:
+- Movement time too fast: 165.0ms
+Metrics:
+- Reaction Time: 463.0 ms
+- Movement Time: 165.0 ms
+- Peak Velocity: 1937.5 px/s
+- Path Length: 173.1 px
+- Directness Ratio: 0.990
+- Movement Units: 1
+- Corrective Movements: 1
+
+Trial 8:
+Valid: Yes
+Quality Score: 0.713
+Metrics:
+- Reaction Time: 411.0 ms
+- Movement Time: 1976.0 ms
+- Peak Velocity: 1051.2 px/s
+- Path Length: 146.3 px
+- Directness Ratio: 0.951
+- Movement Units: 3
+- Corrective Movements: 8

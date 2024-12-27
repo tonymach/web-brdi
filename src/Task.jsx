@@ -9,6 +9,7 @@ import { ExclamationTriangleIcon } from '@radix-ui/react-icons';
 import confetti from 'canvas-confetti';
 import Calibration from './Calibration';
 
+
 const GAME_SIZE = 350;
 const TARGET_SIZE = 30;
 const CURSOR_SIZE = 15;
@@ -78,7 +79,8 @@ export default function CognitiveMotorTask() {
   const [currentPath, setCurrentPath] = useState([]);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
-  
+  const [unitConverter, setUnitConverter] = useState(null);
+
   const [kinematicMetrics, setKinematicMetrics] = useState({
     reactionTime: [], movementTime: [], peakVelocity: [], timeTopeakVelocity: [],
     pathLength: [], directnessRatio: [], movementVariability: [], endpointError: [], movementUnits: [],
@@ -104,6 +106,12 @@ export default function CognitiveMotorTask() {
   const [showCalibration, setShowCalibration] = useState(false);
   const [pixelsPerMM, setPixelsPerMM] = useState(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
+
+  const frameTimeRef = useRef(0);
+  const frameCountRef = useRef(0);
+  const performanceRef = useRef(window.performance);
+  const movementDataRef = useRef([]);
+  const frameRequestRef = useRef(null);
 
   const [urlParams] = useState(getUrlParams());
   const TRIALS_PER_CONDITION = urlParams.trials;
@@ -170,112 +178,219 @@ export default function CognitiveMotorTask() {
   }, [cursorPos, gameState, target]);
 
   useEffect(() => {
-    let intervalId;
-    if (gameState === 'active') {
-      intervalId = setInterval(() => {
-        const now = Date.now();
-        const newPos = { ...cursorPos, time: now - startTimeRef.current };
+    const updateFrame = (timestamp) => {
+      if (gameState !== 'active') {
+        frameRequestRef.current = null;
+        return;
+      }
+  
+      // Track frame timing
+      if (frameTimeRef.current) {
+        const frameDelta = timestamp - frameTimeRef.current;
+        if (frameDelta > 20) {  // Log frame drops
+          console.warn(`Frame drop detected: ${frameDelta.toFixed(2)}ms`);
+        }
+      }
+  
+      // Update at ~100Hz (every 10ms)
+      frameCountRef.current++;
+      if (frameCountRef.current % 1 === 0) {  // Adjust this value to change sampling rate
+        const now = performanceRef.current.now();
+        const newPos = { 
+          ...cursorPos, 
+          time: now - startTimeRef.current,
+          timestamp: now,  // Actual timestamp for validation
+          frame: frameCountRef.current
+        };
+        
+        movementDataRef.current.push(newPos);
         setCurrentPath(prevPath => [...prevPath, newPos]);
         updateKinematicData(newPos);
-      }, COLLECTION_INTERVAL);
+      }
+  
+      frameTimeRef.current = timestamp;
+      frameRequestRef.current = requestAnimationFrame(updateFrame);
+    };
+  
+    if (gameState === 'active' && !frameRequestRef.current) {
+      frameRequestRef.current = requestAnimationFrame(updateFrame);
     }
-    return () => clearInterval(intervalId);
+  
+    return () => {
+      if (frameRequestRef.current) {
+        cancelAnimationFrame(frameRequestRef.current);
+        frameRequestRef.current = null;
+      }
+    };
   }, [gameState, cursorPos]);
 
   const updateKinematicData = (newPos) => {
-    const dt = (newPos.time - lastPos.current.time) / 1000; // Time step in seconds
-    const velocity = calculateVelocity(lastPos.current, newPos, newPos.time - lastPos.current.time);
-    velocities.current.push(velocity);
+    // Only calculate if we have previous position
+    if (!lastPos.current.timestamp) {
+      lastPos.current = newPos;
+      return;
+    }
   
+    const dt = (newPos.timestamp - lastPos.current.timestamp) / 1000; // Time in seconds
+    if (dt === 0) return;  // Skip if timestamps are identical
+  
+    const velocity = calculateVelocity(lastPos.current, newPos, dt * 1000);
+    velocities.current.push({ 
+      value: velocity,
+      timestamp: newPos.timestamp,
+      dt: dt
+    });
+  
+    // Calculate acceleration
     if (velocities.current.length > 1) {
-      const acceleration = (velocity - velocities.current[velocities.current.length - 2]) / dt;
-      accelerations.current.push(acceleration);
+      const prevVel = velocities.current[velocities.current.length - 2].value;
+      const acceleration = (velocity - prevVel) / dt;
+      accelerations.current.push({
+        value: acceleration,
+        timestamp: newPos.timestamp,
+        dt: dt
+      });
     }
   
     lastPos.current = newPos;
   };
+  
+  // Add this validation function
+  const validateMovementData = () => {
+    const data = movementDataRef.current;
+    if (data.length < 2) return null;
+  
+    const intervals = [];
+    let droppedFrames = 0;
+    let totalFrames = 0;
+  
+    for (let i = 1; i < data.length; i++) {
+      const interval = data[i].timestamp - data[i-1].timestamp;
+      intervals.push(interval);
+      if (interval > 20) droppedFrames++;
+      totalFrames++;
+    }
+  
+    return {
+      avgInterval: intervals.reduce((a, b) => a + b, 0) / intervals.length,
+      minInterval: Math.min(...intervals),
+      maxInterval: Math.max(...intervals),
+      droppedFrames,
+      frameDropRate: (droppedFrames / totalFrames) * 100,
+      totalSamples: data.length
+    };
+  };
+  
 
   const calculateKinematicMetrics = () => {
+    if (!unitConverter) return;
+  
     const movementStartIndex = currentPath.findIndex((point, index) => {
       if (index === 0) return false;
       const velocity = calculateVelocity(currentPath[index - 1], point, point.time - currentPath[index - 1].time);
-      return velocity > VELOCITY_THRESHOLD;
+      // Convert velocity threshold to pixels for comparison
+      return velocity > unitConverter.mmPerSecToPxPerSec(VELOCITY_THRESHOLD);
     });
   
     const reactionTime = currentPath[movementStartIndex]?.time || 0;
     const movementTime = currentPath[currentPath.length - 1].time - reactionTime;
     const movementType = isMirrorMode ? 'Mirrored' : 'Direct';
-
+  
     // Calculate ballistic movement time and path length
     let ballisticEndIndex = movementStartIndex;
     for (let i = movementStartIndex + 1; i < currentPath.length; i++) {
       const velocity = calculateVelocity(currentPath[i-1], currentPath[i], currentPath[i].time - currentPath[i-1].time);
-      if (velocity < STOPPING_THRESHOLD) {
+      // Convert stopping threshold to pixels for comparison
+      if (velocity < unitConverter.mmPerSecToPxPerSec(STOPPING_THRESHOLD)) {
         ballisticEndIndex = i;
         break;
       }
     }
     const ballisticMovementTime = currentPath[ballisticEndIndex].time - reactionTime;
-    
-    let fullPathLength = 0;
-    let ballisticPathLength = 0;
+  
+    // Calculate path lengths in mm
+    let fullPathLengthPx = 0;
+    let ballisticPathLengthPx = 0;
     for (let i = 1; i < currentPath.length; i++) {
       const segmentLength = euclideanDistance(currentPath[i-1], currentPath[i]);
-      fullPathLength += segmentLength;
+      fullPathLengthPx += segmentLength;
       if (i <= ballisticEndIndex) {
-        ballisticPathLength += segmentLength;
+        ballisticPathLengthPx += segmentLength;
       }
     }
     
-    const peakVelocity = Math.max(...velocities.current);
-    const timeTopeakVelocity = velocities.current.indexOf(peakVelocity) * COLLECTION_INTERVAL;
+    // Convert path lengths to mm
+    const fullPathLength = unitConverter.pxToMm(fullPathLengthPx);
+    const ballisticPathLength = unitConverter.pxToMm(ballisticPathLengthPx);
+  
+    // Convert velocities to mm/s
+    const velocitiesInMmPerSec = velocities.current.map(v => ({
+      ...v,
+      value: unitConverter.pxPerSecToMmPerSec(v.value)
+    }));
     
-    const startToEndDistance = euclideanDistance(currentPath[0], currentPath[currentPath.length - 1]);
+    const peakVelocity = Math.max(...velocitiesInMmPerSec.map(v => v.value));
+    const timeTopeakVelocity = velocities.current.indexOf(Math.max(...velocities.current.map(v => v.value))) * COLLECTION_INTERVAL;
+  
+    const startToEndDistance = unitConverter.pxToMm(
+      euclideanDistance(currentPath[0], currentPath[currentPath.length - 1])
+    );
     const directnessRatio = startToEndDistance / fullPathLength;
   
+    // Calculate movement variability in mm
     const avgX = currentPath.reduce((sum, pos) => sum + pos.x, 0) / currentPath.length;
     const avgY = currentPath.reduce((sum, pos) => sum + pos.y, 0) / currentPath.length;
-    const movementVariability = currentPath.reduce((sum, pos) => 
-      sum + euclideanDistance(pos, {x: avgX, y: avgY}), 0) / currentPath.length;
+    const movementVariability = unitConverter.pxToMm(
+      currentPath.reduce((sum, pos) => 
+        sum + euclideanDistance(pos, {x: avgX, y: avgY}), 0
+      ) / currentPath.length
+    );
   
     const targetPos = TARGET_POSITIONS[target];
-    const endpointError = euclideanDistance(currentPath[currentPath.length - 1], targetPos);
+    const endpointError = unitConverter.pxToMm(
+      euclideanDistance(currentPath[currentPath.length - 1], targetPos)
+    );
   
     let movementUnits = 1;
     let correctiveMovements = 0;
     let directionReversals = 0;
-    for (let i = 1; i < accelerations.current.length; i++) {
-      if (accelerations.current[i-1] < 0 && accelerations.current[i] > 0) {
+    
+    // Convert accelerations to mm/s²
+    const accelerationsInMmPerSecSq = accelerations.current.map(a => ({
+      ...a,
+      value: unitConverter.pxPerSecToMmPerSec(a.value)
+    }));
+  
+    for (let i = 1; i < accelerationsInMmPerSecSq.length; i++) {
+      if (accelerationsInMmPerSecSq[i-1].value < 0 && accelerationsInMmPerSecSq[i].value > 0) {
         movementUnits++;
         correctiveMovements++;
       }
-      if ((velocities.current[i-1].x * velocities.current[i].x < 0) ||
-          (velocities.current[i-1].y * velocities.current[i].y < 0)) {
+      if ((velocitiesInMmPerSec[i-1].value * velocitiesInMmPerSec[i].value < 0)) {
         directionReversals++;
       }
     }
-
+  
     const percentageDirectionReversals = (directionReversals / currentPath.length) * 100;
-    
-    // Calculate absolute error (distance from target center)
+  
+    // Calculate errors in mm
     const absoluteError = endpointError;
-    
-    // Calculate variable error (standard deviation of endpoint positions)
-    const endX = currentPath[currentPath.length - 1].x;
-    const endY = currentPath[currentPath.length - 1].y;
-    const prevEndpoints = kinematicMetrics.endpointError.map((_, index) => ({
-      x: currentPath[currentPath.length - 1].x,
-      y: currentPath[currentPath.length - 1].y
+  
+    // Convert endpoints to mm for variable error calculation
+    const endpointsMm = kinematicMetrics.endpointError.map((_, index) => ({
+      x: unitConverter.pxToMm(currentPath[currentPath.length - 1].x),
+      y: unitConverter.pxToMm(currentPath[currentPath.length - 1].y)
     }));
-    prevEndpoints.push({ x: endX, y: endY });
-    const avgEndX = prevEndpoints.reduce((sum, pos) => sum + pos.x, 0) / prevEndpoints.length;
-    const avgEndY = prevEndpoints.reduce((sum, pos) => sum + pos.y, 0) / prevEndpoints.length;
+    
+    const avgEndXMm = endpointsMm.reduce((sum, pos) => sum + pos.x, 0) / endpointsMm.length;
+    const avgEndYMm = endpointsMm.reduce((sum, pos) => sum + pos.y, 0) / endpointsMm.length;
+    
     const variableError = Math.sqrt(
-      prevEndpoints.reduce((sum, pos) => 
-        sum + Math.pow(pos.x - avgEndX, 2) + Math.pow(pos.y - avgEndY, 2), 0
-      ) / prevEndpoints.length
+      endpointsMm.reduce((sum, pos) => 
+        sum + Math.pow(pos.x - avgEndXMm, 2) + Math.pow(pos.y - avgEndYMm, 2), 0
+      ) / endpointsMm.length
     );
-
+  
     setKinematicMetrics(prevMetrics => ({
       reactionTime: [...prevMetrics.reactionTime, reactionTime],
       movementTime: [...prevMetrics.movementTime, movementTime],
@@ -295,9 +410,9 @@ export default function CognitiveMotorTask() {
       fullPathLength: [...prevMetrics.fullPathLength, fullPathLength],
       percentageDirectionReversals: [...prevMetrics.percentageDirectionReversals, percentageDirectionReversals],
       movementType: [...prevMetrics.movementType, movementType]
-
     }));
   };
+  
 
   const handleFormSubmit = (e) => {
     e.preventDefault();
@@ -354,14 +469,25 @@ export default function CognitiveMotorTask() {
     );
   };
 
- const showRandomTarget = () => {
+  const showRandomTarget = () => {
     const positions = Object.keys(TARGET_POSITIONS);
     const randomPosition = positions[Math.floor(Math.random() * positions.length)];
+    
+    // Reset all timing references
+    frameTimeRef.current = 0;
+    frameCountRef.current = 0;
+    startTimeRef.current = performanceRef.current.now();
+    movementDataRef.current = [];
+    
+    // Clear any existing animation frame
+    if (frameRequestRef.current) {
+      cancelAnimationFrame(frameRequestRef.current);
+      frameRequestRef.current = null;
+    }
+    
     setTarget(randomPosition);
     setGameState('active');
     setShowStartPosition(false);
-    startTimeRef.current = Date.now();
-    lastCollectionTime.current = startTimeRef.current;
     setCurrentPath([]);
     velocities.current = [];
     accelerations.current = [];
@@ -394,6 +520,7 @@ export default function CognitiveMotorTask() {
 
   const handleCalibrationComplete = (calculatedPixelsPerMM) => {
     setPixelsPerMM(calculatedPixelsPerMM);
+    setUnitConverter(new UnitConverter(calculatedPixelsPerMM));
     setIsCalibrated(true);
     if (userType === 'participant') {
       const availableConditions = getAvailableConditions();
@@ -409,6 +536,11 @@ export default function CognitiveMotorTask() {
   };
 
   const handleHit = () => {
+    const timingQuality = validateMovementData();
+    if (timingQuality) {
+      console.log('Movement timing quality:', timingQuality);
+      // Optionally store timing quality with your other metrics
+    }
     calculateKinematicMetrics();
     const hitTime = Date.now() - startTimeRef.current;
     setStats(prevStats => ({
@@ -553,23 +685,24 @@ export default function CognitiveMotorTask() {
       <p>Reaction Time: {average(kinematicMetrics.reactionTime).toFixed(2)} ms</p>
       <p>Movement Time: {average(kinematicMetrics.movementTime).toFixed(2)} ms</p>
       <p>Ballistic Movement Time: {average(kinematicMetrics.ballisticMovementTime).toFixed(2)} ms</p>
-      <p>Peak Velocity: {average(kinematicMetrics.peakVelocity).toFixed(2)} px/s</p>
+      <p>Peak Velocity: {average(kinematicMetrics.peakVelocity).toFixed(2)} mm/s</p>
       <p>Time to Peak Velocity: {average(kinematicMetrics.timeTopeakVelocity).toFixed(2)} ms</p>
-      <p>Full Path Length: {average(kinematicMetrics.fullPathLength).toFixed(2)} px</p>
-      <p>Ballistic Path Length: {average(kinematicMetrics.ballisticPathLength).toFixed(2)} px</p>
+      <p>Full Path Length: {average(kinematicMetrics.fullPathLength).toFixed(2)} mm</p>
+      <p>Ballistic Path Length: {average(kinematicMetrics.ballisticPathLength).toFixed(2)} mm</p>
       <p>Directness Ratio: {average(kinematicMetrics.directnessRatio).toFixed(2)}</p>
-      <p>Movement Variability: {average(kinematicMetrics.movementVariability).toFixed(2)} px</p>
-      <p>Endpoint Error: {average(kinematicMetrics.endpointError).toFixed(2)} px</p>
+      <p>Movement Variability: {average(kinematicMetrics.movementVariability).toFixed(2)} mm</p>
+      <p>Endpoint Error: {average(kinematicMetrics.endpointError).toFixed(2)} mm</p>
       <p>Movement Units: {average(kinematicMetrics.movementUnits).toFixed(2)}</p>
       <p>Corrective Movements: {average(kinematicMetrics.correctiveMovements).toFixed(2)}</p>
       <p>Direction Reversals: {average(kinematicMetrics.directionReversals).toFixed(2)}</p>
       <p>Percentage Direction Reversals: {average(kinematicMetrics.percentageDirectionReversals).toFixed(2)}%</p>
-      <p>Absolute Error: {average(kinematicMetrics.absoluteError).toFixed(2)} px</p>
-      <p>Variable Error: {average(kinematicMetrics.variableError).toFixed(2)} px</p>
+      <p>Absolute Error: {average(kinematicMetrics.absoluteError).toFixed(2)} mm</p>
+      <p>Variable Error: {average(kinematicMetrics.variableError).toFixed(2)} mm</p>
       <p>Current Mode: {isMirrorMode ? 'Mirrored' : 'Direct'}</p>
       <p>Movement Types: {kinematicMetrics.movementType.join(', ')}</p>
     </div>
   );
+  
 
   const average = (arr) => arr.length ? arr.reduce((a, b) => a + b) / arr.length : 0;
 
@@ -577,11 +710,12 @@ export default function CognitiveMotorTask() {
     const mainCsvContent = [
       ['Participant ID', participantId],
       ['Input Device', inputDevice],
+      ['Pixels per MM', pixelsPerMM],
       ['Trial', 'Reaction Time (ms)', 'Movement Time (ms)', 'Ballistic Movement Time (ms)', 
-       'Peak Velocity (px/s)', 'Time to Peak Velocity (ms)', 'Full Path Length (px)', 
-       'Ballistic Path Length (px)', 'Directness Ratio', 'Movement Variability (px)', 
-       'Endpoint Error (px)', 'Movement Units', 'Corrective Movements', 'Direction Reversals', 
-       'Percentage Direction Reversals (%)', 'Absolute Error (px)', 'Variable Error (px)',
+       'Peak Velocity (mm/s)', 'Time to Peak Velocity (ms)', 'Full Path Length (mm)', 
+       'Ballistic Path Length (mm)', 'Directness Ratio', 'Movement Variability (mm)', 
+       'Endpoint Error (mm)', 'Movement Units', 'Corrective Movements', 'Direction Reversals', 
+       'Percentage Direction Reversals (%)', 'Absolute Error (mm)', 'Variable Error (mm)',
        'Movement Type'],
       ...kinematicMetrics.reactionTime.map((_, index) => [
         index + 1,
@@ -604,26 +738,27 @@ export default function CognitiveMotorTask() {
         kinematicMetrics.movementType[index]
       ])
     ].map(row => row.join(',')).join('\n');
-
+  
+    // Convert path data to mm
     const rawPathCsvContent = paths.map((path, trialIndex) => {
       const trialData = [
         `Trial ${trialIndex + 1}`,
-        'Time (ms)', 'X Position (px)', 'Y Position (px)'
+        'Time (ms)', 'X Position (mm)', 'Y Position (mm)'
       ];
       path.forEach(point => {
-        trialData.push(`${point.time},${point.x},${point.y}`);
+        trialData.push(`${point.time},${unitConverter.pxToMm(point.x).toFixed(2)},${unitConverter.pxToMm(point.y).toFixed(2)}`);
       });
       return trialData.join('\n');
     }).join('\n\n');
-
+  
     const fullCsvContent = `${mainCsvContent}\n\nRaw Path Data:\n${rawPathCsvContent}`;
-
+  
     const blob = new Blob([fullCsvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     if (link.download !== undefined) {
       const url = URL.createObjectURL(blob);
       link.setAttribute('href', url);
-      link.setAttribute('download', `cognitive_motor_task_data_${participantId}.csv`);
+      link.setAttribute('download', `cognitive_motor_task_data_${participantId}_mm.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
