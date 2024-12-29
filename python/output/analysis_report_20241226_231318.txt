@@ -1,0 +1,138 @@
+Motor Control Analysis Report
+===========================
+
+Session Summary
+--------------
+Total Trials: 10
+Valid Trials: 8
+High Quality Trials: 0
+Mean Quality Score: 0.786
+Calibration: 4.91 pixels/mm
+
+Trial Details
+------------
+
+Trial 1:
+Valid: No
+Quality Score: 0.000
+Metrics:
+- Reaction Time: 1072.0 ms
+- Movement Time: 2018.0 ms
+- Peak Velocity: 522.9 mm/s
+- Path Length: 63.9 mm
+- Directness Ratio: 0.420
+- Movement Units: 3
+- Corrective Movements: 10
+Issues:
+- Reaction time too slow: 1072.0ms
+- Path too indirect: 0.420
+
+Trial 2:
+Valid: Yes
+Quality Score: 0.734
+Metrics:
+- Reaction Time: 358.0 ms
+- Movement Time: 1963.0 ms
+- Peak Velocity: 282.7 mm/s
+- Path Length: 31.6 mm
+- Directness Ratio: 0.968
+- Movement Units: 1
+- Corrective Movements: 8
+
+Trial 3:
+Valid: Yes
+Quality Score: 0.796
+Metrics:
+- Reaction Time: 445.0 ms
+- Movement Time: 819.0 ms
+- Peak Velocity: 300.1 mm/s
+- Path Length: 29.8 mm
+- Directness Ratio: 0.999
+- Movement Units: 1
+- Corrective Movements: 8
+
+Trial 4:
+Valid: Yes
+Quality Score: 0.840
+Metrics:
+- Reaction Time: 320.0 ms
+- Movement Time: 776.0 ms
+- Peak Velocity: 326.0 mm/s
+- Path Length: 31.0 mm
+- Directness Ratio: 0.987
+- Movement Units: 1
+- Corrective Movements: 6
+
+Trial 5:
+Valid: Yes
+Quality Score: 0.803
+Metrics:
+- Reaction Time: 426.0 ms
+- Movement Time: 868.0 ms
+- Peak Velocity: 327.3 mm/s
+- Path Length: 32.1 mm
+- Directness Ratio: 0.990
+- Movement Units: 1
+- Corrective Movements: 2
+
+Trial 6:
+Valid: Yes
+Quality Score: 0.815
+Metrics:
+- Reaction Time: 391.0 ms
+- Movement Time: 1452.0 ms
+- Peak Velocity: 259.0 mm/s
+- Path Length: 29.4 mm
+- Directness Ratio: 0.991
+- Movement Units: 2
+- Corrective Movements: 6
+
+Trial 7:
+Valid: Yes
+Quality Score: 0.807
+Metrics:
+- Reaction Time: 414.0 ms
+- Movement Time: 1263.0 ms
+- Peak Velocity: 285.8 mm/s
+- Path Length: 32.2 mm
+- Directness Ratio: 0.926
+- Movement Units: 2
+- Corrective Movements: 14
+
+Trial 8:
+Valid: Yes
+Quality Score: 0.710
+Metrics:
+- Reaction Time: 443.0 ms
+- Movement Time: 1933.0 ms
+- Peak Velocity: 179.8 mm/s
+- Path Length: 32.0 mm
+- Directness Ratio: 0.943
+- Movement Units: 4
+- Corrective Movements: 12
+
+Trial 9:
+Valid: No
+Quality Score: 0.000
+Metrics:
+- Reaction Time: 431.0 ms
+- Movement Time: 3144.0 ms
+- Peak Velocity: 185.7 mm/s
+- Path Length: 30.6 mm
+- Directness Ratio: 0.965
+- Movement Units: 3
+- Corrective Movements: 16
+Issues:
+- Movement time too slow: 3144.0ms
+
+Trial 10:
+Valid: Yes
+Quality Score: 0.783
+Metrics:
+- Reaction Time: 379.0 ms
+- Movement Time: 985.0 ms
+- Peak Velocity: 183.9 mm/s
+- Path Length: 44.5 mm
+- Directness Ratio: 0.746
+- Movement Units: 5
+- Corrective Movements: 9
