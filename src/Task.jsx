@@ -1,570 +1,102 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Button } from "@/components/ui/button";
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ExclamationTriangleIcon } from '@radix-ui/react-icons';
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import confetti from 'canvas-confetti';
+
+import ParticipantForm from './ParticipantForm';
 import Calibration from './Calibration';
+import GameArea from './GameArea';
+import UnitConverter from './UnitConverter';
+import { exportData } from './utils';
 
 
-const GAME_SIZE = 350;
-const TARGET_SIZE = 30;
-const CURSOR_SIZE = 15;
-const CENTER_THRESHOLD = 10;
-const EDGE_BUFFER = 10;
-const START_POSITION = { x: GAME_SIZE / 2 - CURSOR_SIZE / 2, y: GAME_SIZE / 2 - CURSOR_SIZE / 2 };
-const COLLECTION_INTERVAL = 10;
-const TARGET_DELAY = 500; // Changed to 500ms as requested
-const DEFAULT_TRIALS = 20; // Default number of trials
-const HOLD_DURATION = 500; // 500ms hold requirement
-
-
-const VELOCITY_THRESHOLD = 50; // pixels/second for movement initiation
-const STOPPING_THRESHOLD = 10; // pixels/second for considering movement stopped
-const CREDIT_CARD_LENGTH_MM = 85.6;
-
-const euclideanDistance = (p1, p2) => 
-  Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-
-const calculateVelocity = (p1, p2, timeDiff) => 
-  euclideanDistance(p1, p2) / (timeDiff / 1000);
-
-
-const calculateProgress = (startTime) => {
-  if (!startTime) return 0;
-  const elapsed = Date.now() - startTime;
-  return Math.min(elapsed / HOLD_DURATION, 1);
-};
-
-// URL parameter handling
-const getUrlParams = () => {
-  // Try to get params from both regular URL and hash
-  const urlParams = new URLSearchParams(window.location.search);
-  const hashParams = new URLSearchParams(window.location.hash.split('?')[1] || '');
-  
-  // Get params from URL or hash, whichever has them
-  const params = urlParams.get('conditions') ? urlParams : hashParams;
-  
-  const trials = parseInt(params.get('trials')) || DEFAULT_TRIALS;
-  const conditionsStr = params.get('conditions') || 'regular,mirror,decoupled,decoupledMirror';
-  const conditions = conditionsStr.toLowerCase().split(',').map(c => c.trim());
-  
-  console.log('Parsed URL params:', { trials, conditions }); // For debugging
-  return { trials, conditions };
-};
-
-const TARGET_POSITIONS = {
-  top: { x: GAME_SIZE / 2 - TARGET_SIZE / 2, y: EDGE_BUFFER },
-  bottom: { x: GAME_SIZE / 2 - TARGET_SIZE / 2, y: GAME_SIZE - TARGET_SIZE - EDGE_BUFFER },
-  left: { x: EDGE_BUFFER, y: GAME_SIZE / 2 - TARGET_SIZE / 2 },
-  right: { x: GAME_SIZE - TARGET_SIZE - EDGE_BUFFER, y: GAME_SIZE / 2 - TARGET_SIZE / 2 },
-};
+import {
+  CREDIT_CARD_LENGTH_MM,
+  DEFAULT_TRIALS,
+  getUrlParams
+} from './constants';
 
 export default function CognitiveMotorTask() {
+  // Core state
   const [participantId, setParticipantId] = useState('');
   const [inputDevice, setInputDevice] = useState('');
-  const [isFormSubmitted, setIsFormSubmitted] = useState(false);
   const [userType, setUserType] = useState('');
-  const [cursorPos, setCursorPos] = useState(START_POSITION);
-  const [target, setTarget] = useState(null);
-  const [gameState, setGameState] = useState('waiting');
-  const [stats, setStats] = useState({ hits: 0, misses: 0, avgTime: 0 });
+  const [isFormSubmitted, setIsFormSubmitted] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(false);
+  const [unitConverter, setUnitConverter] = useState(null);
+  const [error, setError] = useState(null);
+  const [message, setMessage] = useState(null);
+
+  // Trial tracking
+  const [trialsCompleted, setTrialsCompleted] = useState(0);
+  const [isTaskComplete, setIsTaskComplete] = useState(false);
+  const [currentCondition, setCurrentCondition] = useState(0);
   const [isMirrorMode, setIsMirrorMode] = useState(false);
-  const [isDecoupledMode, setIsDecoupledMode] = useState(false);
   const [showPaths, setShowPaths] = useState(false);
   const [paths, setPaths] = useState([]);
   const [currentPath, setCurrentPath] = useState([]);
-  const [error, setError] = useState(null);
-  const [message, setMessage] = useState(null);
-  const [unitConverter, setUnitConverter] = useState(null);
 
-  const [kinematicMetrics, setKinematicMetrics] = useState({
-    reactionTime: [], movementTime: [], peakVelocity: [], timeTopeakVelocity: [],
-    pathLength: [], directnessRatio: [], movementVariability: [], endpointError: [], movementUnits: [],
-    ballisticMovementTime: [], ballisticPathLength: [], correctiveMovements: [],
-    directionReversals: [], absoluteError: [], variableError: [],
-    fullPathLength: [], percentageDirectionReversals: [],
-    movementType: []
-
-  });
-  const [currentCondition, setCurrentCondition] = useState(0);
-  const [trialsCompleted, setTrialsCompleted] = useState(0);
-  const [isTaskComplete, setIsTaskComplete] = useState(false);
-  const gameRef = useRef(null);
-  const startTimeRef = useRef(null);
-  const lastCollectionTime = useRef(0);
-  const lastPos = useRef(START_POSITION);
-  const velocities = useRef([]);
-  const accelerations = useRef([]);
-  const [showStartPosition, setShowStartPosition] = useState(true);
-  const [holdStartTime, setHoldStartTime] = useState(null);
-  const [holdProgress, setHoldProgress] = useState(0);
-
-  const [showCalibration, setShowCalibration] = useState(false);
-  const [pixelsPerMM, setPixelsPerMM] = useState(null);
-  const [isCalibrated, setIsCalibrated] = useState(false);
-
-  const frameTimeRef = useRef(0);
-  const frameCountRef = useRef(0);
-  const performanceRef = useRef(window.performance);
-  const movementDataRef = useRef([]);
-  const frameRequestRef = useRef(null);
-
+  // Get URL parameters
   const [urlParams] = useState(getUrlParams());
-  const TRIALS_PER_CONDITION = urlParams.trials;
+  const TRIALS_PER_CONDITION = urlParams.trials || DEFAULT_TRIALS;
 
+  // Parse conditions from URL
   const conditions = urlParams.conditions.map(condition => {
     switch(condition.toLowerCase()) {
       case 'regular':
-        return { name: 'Regular', mirror: false, decoupled: false };
+        return { name: 'Regular', mirror: false };
       case 'mirror':
-        return { name: 'Mirror', mirror: true, decoupled: false };
-      case 'decoupled':
-        return { name: 'Decoupled', mirror: false, decoupled: true, requiresTouchscreen: true };
-      case 'decoupledmirror':
-      case 'decoupled_mirror': // Add support for different separator
-      case 'decoupled-mirror': // Add support for different separator
-        return { name: 'Decoupled Mirror', mirror: true, decoupled: true, requiresTouchscreen: true };
+        return { name: 'Mirror', mirror: true };
       default:
         console.log('Unknown condition:', condition);
         return null;
     }
   }).filter(Boolean);
-  
-  // Add this check for empty conditions
+
   if (conditions.length === 0) {
-    console.warn('No valid conditions found, using defaults');
-    conditions.push(
-      { name: 'Regular', mirror: false, decoupled: false }
-    );
+    conditions.push({ name: 'Regular', mirror: false });
   }
 
-
-  const getAvailableConditions = () => {
-    return conditions.filter(condition => !condition.requiresTouchscreen || inputDevice === 'touchscreen');
-  };
-
-  useEffect(() => {
-    let animationFrame;
-    
-    const updateProgress = () => {
-      if (holdStartTime) {
-        setHoldProgress(calculateProgress(holdStartTime));
-        animationFrame = requestAnimationFrame(updateProgress);
-      } else {
-        setHoldProgress(0);
-      }
-    };
-  
-    if (holdStartTime) {
-      animationFrame = requestAnimationFrame(updateProgress);
-    }
-  
-    return () => {
-      if (animationFrame) {
-        cancelAnimationFrame(animationFrame);
-      }
-    };
-  }, [holdStartTime]);
-
-
-  useEffect(() => {
-    if (gameState === 'active' && target) {
-      checkCollision();
-    }
-  }, [cursorPos, gameState, target]);
-
-  useEffect(() => {
-    const updateFrame = (timestamp) => {
-      if (gameState !== 'active') {
-        frameRequestRef.current = null;
-        return;
-      }
-  
-      // Track frame timing
-      if (frameTimeRef.current) {
-        const frameDelta = timestamp - frameTimeRef.current;
-        if (frameDelta > 20) {  // Log frame drops
-          console.warn(`Frame drop detected: ${frameDelta.toFixed(2)}ms`);
-        }
-      }
-  
-      // Update at ~100Hz (every 10ms)
-      frameCountRef.current++;
-      if (frameCountRef.current % 1 === 0) {  // Adjust this value to change sampling rate
-        const now = performanceRef.current.now();
-        const newPos = { 
-          ...cursorPos, 
-          time: now - startTimeRef.current,
-          timestamp: now,  // Actual timestamp for validation
-          frame: frameCountRef.current
-        };
-        
-        movementDataRef.current.push(newPos);
-        setCurrentPath(prevPath => [...prevPath, newPos]);
-        updateKinematicData(newPos);
-      }
-  
-      frameTimeRef.current = timestamp;
-      frameRequestRef.current = requestAnimationFrame(updateFrame);
-    };
-  
-    if (gameState === 'active' && !frameRequestRef.current) {
-      frameRequestRef.current = requestAnimationFrame(updateFrame);
-    }
-  
-    return () => {
-      if (frameRequestRef.current) {
-        cancelAnimationFrame(frameRequestRef.current);
-        frameRequestRef.current = null;
-      }
-    };
-  }, [gameState, cursorPos]);
-
-  const updateKinematicData = (newPos) => {
-    // Only calculate if we have previous position
-    if (!lastPos.current.timestamp) {
-      lastPos.current = newPos;
-      return;
-    }
-  
-    const dt = (newPos.timestamp - lastPos.current.timestamp) / 1000; // Time in seconds
-    if (dt === 0) return;  // Skip if timestamps are identical
-  
-    const velocity = calculateVelocity(lastPos.current, newPos, dt * 1000);
-    velocities.current.push({ 
-      value: velocity,
-      timestamp: newPos.timestamp,
-      dt: dt
-    });
-  
-    // Calculate acceleration
-    if (velocities.current.length > 1) {
-      const prevVel = velocities.current[velocities.current.length - 2].value;
-      const acceleration = (velocity - prevVel) / dt;
-      accelerations.current.push({
-        value: acceleration,
-        timestamp: newPos.timestamp,
-        dt: dt
-      });
-    }
-  
-    lastPos.current = newPos;
-  };
-  
-  // Add this validation function
-  const validateMovementData = () => {
-    const data = movementDataRef.current;
-    if (data.length < 2) return null;
-  
-    const intervals = [];
-    let droppedFrames = 0;
-    let totalFrames = 0;
-  
-    for (let i = 1; i < data.length; i++) {
-      const interval = data[i].timestamp - data[i-1].timestamp;
-      intervals.push(interval);
-      if (interval > 20) droppedFrames++;
-      totalFrames++;
-    }
-  
-    return {
-      avgInterval: intervals.reduce((a, b) => a + b, 0) / intervals.length,
-      minInterval: Math.min(...intervals),
-      maxInterval: Math.max(...intervals),
-      droppedFrames,
-      frameDropRate: (droppedFrames / totalFrames) * 100,
-      totalSamples: data.length
-    };
-  };
-  
-
-  const calculateKinematicMetrics = () => {
-    if (!unitConverter) return;
-  
-    const movementStartIndex = currentPath.findIndex((point, index) => {
-      if (index === 0) return false;
-      const velocity = calculateVelocity(currentPath[index - 1], point, point.time - currentPath[index - 1].time);
-      // Convert velocity threshold to pixels for comparison
-      return velocity > unitConverter.mmPerSecToPxPerSec(VELOCITY_THRESHOLD);
-    });
-  
-    const reactionTime = currentPath[movementStartIndex]?.time || 0;
-    const movementTime = currentPath[currentPath.length - 1].time - reactionTime;
-    const movementType = isMirrorMode ? 'Mirrored' : 'Direct';
-  
-    // Calculate ballistic movement time and path length
-    let ballisticEndIndex = movementStartIndex;
-    for (let i = movementStartIndex + 1; i < currentPath.length; i++) {
-      const velocity = calculateVelocity(currentPath[i-1], currentPath[i], currentPath[i].time - currentPath[i-1].time);
-      // Convert stopping threshold to pixels for comparison
-      if (velocity < unitConverter.mmPerSecToPxPerSec(STOPPING_THRESHOLD)) {
-        ballisticEndIndex = i;
-        break;
-      }
-    }
-    const ballisticMovementTime = currentPath[ballisticEndIndex].time - reactionTime;
-  
-    // Calculate path lengths in mm
-    let fullPathLengthPx = 0;
-    let ballisticPathLengthPx = 0;
-    for (let i = 1; i < currentPath.length; i++) {
-      const segmentLength = euclideanDistance(currentPath[i-1], currentPath[i]);
-      fullPathLengthPx += segmentLength;
-      if (i <= ballisticEndIndex) {
-        ballisticPathLengthPx += segmentLength;
-      }
-    }
-    
-    // Convert path lengths to mm
-    const fullPathLength = unitConverter.pxToMm(fullPathLengthPx);
-    const ballisticPathLength = unitConverter.pxToMm(ballisticPathLengthPx);
-  
-    // Convert velocities to mm/s
-    const velocitiesInMmPerSec = velocities.current.map(v => ({
-      ...v,
-      value: unitConverter.pxPerSecToMmPerSec(v.value)
-    }));
-    
-    const peakVelocity = Math.max(...velocitiesInMmPerSec.map(v => v.value));
-    const timeTopeakVelocity = velocities.current.indexOf(Math.max(...velocities.current.map(v => v.value))) * COLLECTION_INTERVAL;
-  
-    const startToEndDistance = unitConverter.pxToMm(
-      euclideanDistance(currentPath[0], currentPath[currentPath.length - 1])
-    );
-    const directnessRatio = startToEndDistance / fullPathLength;
-  
-    // Calculate movement variability in mm
-    const avgX = currentPath.reduce((sum, pos) => sum + pos.x, 0) / currentPath.length;
-    const avgY = currentPath.reduce((sum, pos) => sum + pos.y, 0) / currentPath.length;
-    const movementVariability = unitConverter.pxToMm(
-      currentPath.reduce((sum, pos) => 
-        sum + euclideanDistance(pos, {x: avgX, y: avgY}), 0
-      ) / currentPath.length
-    );
-  
-    const targetPos = TARGET_POSITIONS[target];
-    const endpointError = unitConverter.pxToMm(
-      euclideanDistance(currentPath[currentPath.length - 1], targetPos)
-    );
-  
-    let movementUnits = 1;
-    let correctiveMovements = 0;
-    let directionReversals = 0;
-    
-    // Convert accelerations to mm/s²
-    const accelerationsInMmPerSecSq = accelerations.current.map(a => ({
-      ...a,
-      value: unitConverter.pxPerSecToMmPerSec(a.value)
-    }));
-  
-    for (let i = 1; i < accelerationsInMmPerSecSq.length; i++) {
-      if (accelerationsInMmPerSecSq[i-1].value < 0 && accelerationsInMmPerSecSq[i].value > 0) {
-        movementUnits++;
-        correctiveMovements++;
-      }
-      if ((velocitiesInMmPerSec[i-1].value * velocitiesInMmPerSec[i].value < 0)) {
-        directionReversals++;
-      }
-    }
-  
-    const percentageDirectionReversals = (directionReversals / currentPath.length) * 100;
-  
-    // Calculate errors in mm
-    const absoluteError = endpointError;
-  
-    // Convert endpoints to mm for variable error calculation
-    const endpointsMm = kinematicMetrics.endpointError.map((_, index) => ({
-      x: unitConverter.pxToMm(currentPath[currentPath.length - 1].x),
-      y: unitConverter.pxToMm(currentPath[currentPath.length - 1].y)
-    }));
-    
-    const avgEndXMm = endpointsMm.reduce((sum, pos) => sum + pos.x, 0) / endpointsMm.length;
-    const avgEndYMm = endpointsMm.reduce((sum, pos) => sum + pos.y, 0) / endpointsMm.length;
-    
-    const variableError = Math.sqrt(
-      endpointsMm.reduce((sum, pos) => 
-        sum + Math.pow(pos.x - avgEndXMm, 2) + Math.pow(pos.y - avgEndYMm, 2), 0
-      ) / endpointsMm.length
-    );
-  
-    setKinematicMetrics(prevMetrics => ({
-      reactionTime: [...prevMetrics.reactionTime, reactionTime],
-      movementTime: [...prevMetrics.movementTime, movementTime],
-      peakVelocity: [...prevMetrics.peakVelocity, peakVelocity],
-      timeTopeakVelocity: [...prevMetrics.timeTopeakVelocity, timeTopeakVelocity],
-      pathLength: [...prevMetrics.pathLength, fullPathLength],
-      directnessRatio: [...prevMetrics.directnessRatio, directnessRatio],
-      movementVariability: [...prevMetrics.movementVariability, movementVariability],
-      endpointError: [...prevMetrics.endpointError, endpointError],
-      movementUnits: [...prevMetrics.movementUnits, movementUnits],
-      ballisticMovementTime: [...prevMetrics.ballisticMovementTime, ballisticMovementTime],
-      ballisticPathLength: [...prevMetrics.ballisticPathLength, ballisticPathLength],
-      correctiveMovements: [...prevMetrics.correctiveMovements, correctiveMovements],
-      directionReversals: [...prevMetrics.directionReversals, directionReversals],
-      absoluteError: [...prevMetrics.absoluteError, absoluteError],
-      variableError: [...prevMetrics.variableError, variableError],
-      fullPathLength: [...prevMetrics.fullPathLength, fullPathLength],
-      percentageDirectionReversals: [...prevMetrics.percentageDirectionReversals, percentageDirectionReversals],
-      movementType: [...prevMetrics.movementType, movementType]
-    }));
-  };
-  
-
-  const handleFormSubmit = (e) => {
-    e.preventDefault();
-    if (participantId.trim() === '') {
+  const handleFormSubmit = (formData) => {
+    if (formData.participantId.trim() === '') {
       setError('Please enter a valid Participant ID.');
       return;
     }
-    if (!inputDevice) {
-      setError('Please select an input device.');
-      return;
-    }
-    if (!userType) {
-      setError('Please select user type.');
-      return;
-    }
+    
+    setParticipantId(formData.participantId);
+    setInputDevice(formData.inputDevice);
+    setUserType(formData.userType);
     setIsFormSubmitted(true);
-
-    if (userType === 'participant') {
-      const availableConditions = getAvailableConditions();
+    
+    if (formData.userType === 'participant') {
       setCurrentCondition(0);
-      setIsMirrorMode(availableConditions[0].mirror);
-      setIsDecoupledMode(availableConditions[0].decoupled);
-    }
-    setMessage(userType === 'participant' ? 'Task started. Move the cursor to the green circle to begin.' : 'Researcher mode activated. All controls are available.');
-  };
-
-  const handleMouseMove = (e) => {
-    if (!gameRef.current) return;
-    const rect = gameRef.current.getBoundingClientRect();
-    let x = e.clientX - rect.left - CURSOR_SIZE / 2;
-    let y = e.clientY - rect.top - CURSOR_SIZE / 2;
-
-    if (isMirrorMode) {
-      x = GAME_SIZE - x - CURSOR_SIZE;
-      y = GAME_SIZE - y - CURSOR_SIZE;
-    }
-
-    x = Math.max(0, Math.min(x, GAME_SIZE - CURSOR_SIZE));
-    y = Math.max(0, Math.min(y, GAME_SIZE - CURSOR_SIZE));
-
-    setCursorPos({ x, y });
-
-    if (gameState === 'waiting' && isInCenter(x, y)) {
-      setGameState('ready');
-      setMessage('Hold the cursor in the center. Target will appear shortly.');
-      setTimeout(showRandomTarget, TARGET_DELAY);
-    }
-  };
-
-  const isInCenter = (x, y) => {
-    return (
-      Math.abs(x - START_POSITION.x) < CENTER_THRESHOLD &&
-      Math.abs(y - START_POSITION.y) < CENTER_THRESHOLD
-    );
-  };
-
-  const showRandomTarget = () => {
-    const positions = Object.keys(TARGET_POSITIONS);
-    const randomPosition = positions[Math.floor(Math.random() * positions.length)];
-    
-    // Reset all timing references
-    frameTimeRef.current = 0;
-    frameCountRef.current = 0;
-    startTimeRef.current = performanceRef.current.now();
-    movementDataRef.current = [];
-    
-    // Clear any existing animation frame
-    if (frameRequestRef.current) {
-      cancelAnimationFrame(frameRequestRef.current);
-      frameRequestRef.current = null;
-    }
-    
-    setTarget(randomPosition);
-    setGameState('active');
-    setShowStartPosition(false);
-    setCurrentPath([]);
-    velocities.current = [];
-    accelerations.current = [];
-    setMessage('Move to the red target as quickly as possible.');
-  };
-
-  const checkCollision = () => {
-    const targetPos = TARGET_POSITIONS[target];
-    const isOverTarget = (
-      cursorPos.x < targetPos.x + TARGET_SIZE &&
-      cursorPos.x + CURSOR_SIZE > targetPos.x &&
-      cursorPos.y < targetPos.y + TARGET_SIZE &&
-      cursorPos.y + CURSOR_SIZE > targetPos.y
-    );
-  
-    if (isOverTarget) {
-      if (!holdStartTime) {
-        // Just started holding on target
-        setHoldStartTime(Date.now());
-      } else if (Date.now() - holdStartTime >= HOLD_DURATION) {
-        // Successfully held for required duration
-        handleHit();
-        setHoldStartTime(null); // Reset hold timer
-      }
-    } else {
-      // Left target area, reset hold timer
-      setHoldStartTime(null);
+      setIsMirrorMode(conditions[0].mirror);
     }
   };
 
   const handleCalibrationComplete = (calculatedPixelsPerMM) => {
-    setPixelsPerMM(calculatedPixelsPerMM);
     setUnitConverter(new UnitConverter(calculatedPixelsPerMM));
     setIsCalibrated(true);
-    if (userType === 'participant') {
-      const availableConditions = getAvailableConditions();
-      setCurrentCondition(0);
-      setIsMirrorMode(availableConditions[0].mirror);
-      setIsDecoupledMode(availableConditions[0].decoupled);
-    }
-    setMessage(userType === 'participant' ? 'Task started. Move the cursor to the green circle to begin.' : 'Researcher mode activated. All controls are available.');
+    setMessage('Move to the green circle to begin.');
   };
 
-  const startCalibration = () => {
-    setShowCalibration(true);
-  };
+  // Data state
+  const [trialData, setTrialData] = useState([]);
 
-  const handleHit = () => {
-    const timingQuality = validateMovementData();
-    if (timingQuality) {
-      console.log('Movement timing quality:', timingQuality);
-      // Optionally store timing quality with your other metrics
-    }
-    calculateKinematicMetrics();
-    const hitTime = Date.now() - startTimeRef.current;
-    setStats(prevStats => ({
-      hits: prevStats.hits + 1,
-      misses: prevStats.misses,
-      avgTime: Math.round((prevStats.avgTime * prevStats.hits + hitTime) / (prevStats.hits + 1))
-    }));
-    setPaths(prevPaths => [...prevPaths, currentPath]);
-    setTarget(null);
-    setGameState('waiting');
-    setCursorPos(START_POSITION);
-    setShowStartPosition(true);
-  
+  const handleTrialComplete = (newTrialData) => {
+    setTrialData(prev => [...prev, newTrialData]);
+
     if (userType === 'participant') {
       setTrialsCompleted(prev => {
         const newTrialsCompleted = prev + 1;
         if (newTrialsCompleted === TRIALS_PER_CONDITION) {
-          const availableConditions = getAvailableConditions();
-          if (currentCondition < availableConditions.length - 1) {
+          if (currentCondition < conditions.length - 1) {
             const nextCondition = currentCondition + 1;
             setCurrentCondition(nextCondition);
             setTrialsCompleted(0);
-            setIsMirrorMode(availableConditions[nextCondition].mirror);
-            setIsDecoupledMode(availableConditions[nextCondition].decoupled);
+            setIsMirrorMode(conditions[nextCondition].mirror);
+            setMessage(`Starting ${conditions[nextCondition].name} condition.`);
           } else {
             setIsTaskComplete(true);
             confetti({
@@ -577,254 +109,23 @@ export default function CognitiveMotorTask() {
         return newTrialsCompleted;
       });
     }
-
-    setMessage(userType === 'participant' ? `Trial complete. ${TRIALS_PER_CONDITION - trialsCompleted - 1} trials left in this condition.` : 'Target hit! Move back to the center to continue.');
   };
 
-  const handleMouseLeave = () => {
-    if (gameState === 'active') {
-      setHoldStartTime(null); // Reset hold timer
-      setStats(prevStats => ({
-        ...prevStats,
-        misses: prevStats.misses + 1
-      }));
-      setPaths(prevPaths => [...prevPaths, currentPath]);
-      setTarget(null);
-      setGameState('waiting');
-      setCursorPos(START_POSITION);
-      setMessage('Mouse left the game area. Move back to the center to continue.');
-    }
+  const handleExport = () => {
+    exportData(trialData, unitConverter, participantId);
   };
 
-  const renderPaths = () => {
-    return paths.map((path, index) => (
-      <svg key={index} className="absolute top-0 left-0" width={GAME_SIZE} height={GAME_SIZE}>
-        <path
-          d={`M ${path[0].x + CURSOR_SIZE / 2} ${path[0].y + CURSOR_SIZE / 2} ${path.map(p => `L ${p.x + CURSOR_SIZE / 2} ${p.y + CURSOR_SIZE / 2}`).join(' ')}`}
-          fill="none"
-          stroke="rgba(0, 0, 255, 0.5)"
-          strokeWidth="2"
-        />
-      </svg>
-    ));
-  };
-
-  const renderGameArea = (isTopBox = true) => (
-    <div
-      className={`relative bg-white border-2 border-gray-300 ${isTopBox ? 'mb-4' : ''}`}
-      style={{ width: GAME_SIZE, height: GAME_SIZE }}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
-    >
-      {showPaths && renderPaths()}
-{isTopBox && target && (
-  <div className="absolute" style={{
-    width: TARGET_SIZE,
-    height: TARGET_SIZE,
-    left: TARGET_POSITIONS[target].x,
-    top: TARGET_POSITIONS[target].y,
-  }}>
-    {/* Background circle */}
-    <div className={`absolute rounded-full transition-colors duration-200 ${
-      holdStartTime ? 'bg-yellow-500' : 'bg-red-500'
-    }`}
-    style={{
-      width: '100%',
-      height: '100%',
-    }} />
-    
-    {/* Progress ring */}
-    <svg
-      className="absolute top-0 left-0"
-      width={TARGET_SIZE}
-      height={TARGET_SIZE}
-      viewBox={`0 0 ${TARGET_SIZE} ${TARGET_SIZE}`}
-      style={{ transform: 'rotate(-90deg)' }}
-    >
-      <circle
-        cx={TARGET_SIZE / 2}
-        cy={TARGET_SIZE / 2}
-        r={(TARGET_SIZE / 2) - 2}
-        fill="none"
-        stroke="#22c55e"
-        strokeWidth="2"
-        strokeDasharray={`${2 * Math.PI * ((TARGET_SIZE / 2) - 2)}`}
-        strokeDashoffset={`${(1 - holdProgress) * 2 * Math.PI * ((TARGET_SIZE / 2) - 2)}`}
-      />
-    </svg>
-  </div>
-)}
-      {(!isDecoupledMode || isTopBox) && (
-        <div
-          className="absolute bg-blue-500 rounded-full"
-          style={{
-            width: CURSOR_SIZE,
-            height: CURSOR_SIZE,
-            left: cursorPos.x,
-            top: cursorPos.y,
-          }}
-        />
-      )}
-      {isTopBox && showStartPosition && (
-        <div
-          className="absolute bg-green-500 rounded-full"
-          style={{
-            width: CURSOR_SIZE,
-            height: CURSOR_SIZE,
-            left: START_POSITION.x,
-            top: START_POSITION.y,
-          }}
-        />
-      )}
-    </div>
-  );
-
-  const renderMetrics = () => (
-    <div className="mt-4 text-sm">
-      <h3 className="font-bold mb-2">Kinematic Metrics (Averages):</h3>
-      <p>Reaction Time: {average(kinematicMetrics.reactionTime).toFixed(2)} ms</p>
-      <p>Movement Time: {average(kinematicMetrics.movementTime).toFixed(2)} ms</p>
-      <p>Ballistic Movement Time: {average(kinematicMetrics.ballisticMovementTime).toFixed(2)} ms</p>
-      <p>Peak Velocity: {average(kinematicMetrics.peakVelocity).toFixed(2)} mm/s</p>
-      <p>Time to Peak Velocity: {average(kinematicMetrics.timeTopeakVelocity).toFixed(2)} ms</p>
-      <p>Full Path Length: {average(kinematicMetrics.fullPathLength).toFixed(2)} mm</p>
-      <p>Ballistic Path Length: {average(kinematicMetrics.ballisticPathLength).toFixed(2)} mm</p>
-      <p>Directness Ratio: {average(kinematicMetrics.directnessRatio).toFixed(2)}</p>
-      <p>Movement Variability: {average(kinematicMetrics.movementVariability).toFixed(2)} mm</p>
-      <p>Endpoint Error: {average(kinematicMetrics.endpointError).toFixed(2)} mm</p>
-      <p>Movement Units: {average(kinematicMetrics.movementUnits).toFixed(2)}</p>
-      <p>Corrective Movements: {average(kinematicMetrics.correctiveMovements).toFixed(2)}</p>
-      <p>Direction Reversals: {average(kinematicMetrics.directionReversals).toFixed(2)}</p>
-      <p>Percentage Direction Reversals: {average(kinematicMetrics.percentageDirectionReversals).toFixed(2)}%</p>
-      <p>Absolute Error: {average(kinematicMetrics.absoluteError).toFixed(2)} mm</p>
-      <p>Variable Error: {average(kinematicMetrics.variableError).toFixed(2)} mm</p>
-      <p>Current Mode: {isMirrorMode ? 'Mirrored' : 'Direct'}</p>
-      <p>Movement Types: {kinematicMetrics.movementType.join(', ')}</p>
-    </div>
-  );
-  
-
-  const average = (arr) => arr.length ? arr.reduce((a, b) => a + b) / arr.length : 0;
-
-  const exportData = () => {
-    const mainCsvContent = [
-      ['Participant ID', participantId],
-      ['Input Device', inputDevice],
-      ['Pixels per MM', pixelsPerMM],
-      ['Trial', 'Reaction Time (ms)', 'Movement Time (ms)', 'Ballistic Movement Time (ms)', 
-       'Peak Velocity (mm/s)', 'Time to Peak Velocity (ms)', 'Full Path Length (mm)', 
-       'Ballistic Path Length (mm)', 'Directness Ratio', 'Movement Variability (mm)', 
-       'Endpoint Error (mm)', 'Movement Units', 'Corrective Movements', 'Direction Reversals', 
-       'Percentage Direction Reversals (%)', 'Absolute Error (mm)', 'Variable Error (mm)',
-       'Movement Type'],
-      ...kinematicMetrics.reactionTime.map((_, index) => [
-        index + 1,
-        kinematicMetrics.reactionTime[index],
-        kinematicMetrics.movementTime[index],
-        kinematicMetrics.ballisticMovementTime[index],
-        kinematicMetrics.peakVelocity[index],
-        kinematicMetrics.timeTopeakVelocity[index],
-        kinematicMetrics.fullPathLength[index],
-        kinematicMetrics.ballisticPathLength[index],
-        kinematicMetrics.directnessRatio[index],
-        kinematicMetrics.movementVariability[index],
-        kinematicMetrics.endpointError[index],
-        kinematicMetrics.movementUnits[index],
-        kinematicMetrics.correctiveMovements[index],
-        kinematicMetrics.directionReversals[index],
-        kinematicMetrics.percentageDirectionReversals[index],
-        kinematicMetrics.absoluteError[index],
-        kinematicMetrics.variableError[index],
-        kinematicMetrics.movementType[index]
-      ])
-    ].map(row => row.join(',')).join('\n');
-  
-    // Convert path data to mm
-    const rawPathCsvContent = paths.map((path, trialIndex) => {
-      const trialData = [
-        `Trial ${trialIndex + 1}`,
-        'Time (ms)', 'X Position (mm)', 'Y Position (mm)'
-      ];
-      path.forEach(point => {
-        trialData.push(`${point.time},${unitConverter.pxToMm(point.x).toFixed(2)},${unitConverter.pxToMm(point.y).toFixed(2)}`);
-      });
-      return trialData.join('\n');
-    }).join('\n\n');
-  
-    const fullCsvContent = `${mainCsvContent}\n\nRaw Path Data:\n${rawPathCsvContent}`;
-  
-    const blob = new Blob([fullCsvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    if (link.download !== undefined) {
-      const url = URL.createObjectURL(blob);
-      link.setAttribute('href', url);
-      link.setAttribute('download', `cognitive_motor_task_data_${participantId}_mm.csv`);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
-  };
-
+  // Render states
   if (!isFormSubmitted) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100">
-        <Card className="w-[400px]">
-          <CardHeader>
-            <CardTitle>Participant Information</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {error && (
-              <Alert variant="destructive" className="mb-4">
-                <ExclamationTriangleIcon className="h-4 w-4" />
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-            <form onSubmit={handleFormSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="participantId">Participant ID</Label>
-                <Input
-                  id="participantId"
-                  value={participantId}
-                  onChange={(e) => setParticipantId(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="inputDevice">Input Device</Label>
-                <Select onValueChange={setInputDevice} required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select input device" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="touchscreen">Touchscreen</SelectItem>
-                    <SelectItem value="mouse">Mouse</SelectItem>
-                    <SelectItem value="trackpad">Trackpad</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="userType">User Type</Label>
-                <Select onValueChange={setUserType} required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select user type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="participant">Participant</SelectItem>
-                    <SelectItem value="researcher">Researcher</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button type="submit" className="w-full">Submit</Button>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
+      <ParticipantForm 
+        onSubmit={handleFormSubmit}
+        error={error}
+      />
     );
   }
 
-  if (isFormSubmitted && !isCalibrated) {
+  if (!isCalibrated) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100">
         <Card className="w-[400px]">
@@ -833,7 +134,7 @@ export default function CognitiveMotorTask() {
           </CardHeader>
           <CardContent>
             <Calibration 
-              onCalibrationComplete={handleCalibrationComplete} 
+              onCalibrationComplete={handleCalibrationComplete}
               creditCardLength={CREDIT_CARD_LENGTH_MM}
             />
           </CardContent>
@@ -849,9 +150,13 @@ export default function CognitiveMotorTask() {
           <CardHeader>
             <CardTitle>Task Complete!</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <p>Thank you for participating in the study.</p>
-            <Button onClick={exportData} className="mt-4">Download Results</Button>
+            <div className="flex justify-center">
+              <Button onClick={handleExport}>
+                Download Data
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -872,51 +177,85 @@ export default function CognitiveMotorTask() {
               </Alert>
             )}
           </div>
-          <div className="mb-4">
-            {isDecoupledMode ? (
-              <>
-                {renderGameArea(true)}
-                <div ref={gameRef}>{renderGameArea(false)}</div>
-              </>
-            ) : (
-              <div ref={gameRef}>{renderGameArea()}</div>
-            )}
-            </div>
-            {userType === 'participant' ? (
-            <div className="mt-4">
-              <p>Current Condition: {getAvailableConditions()[currentCondition]?.name}</p>
-              <p>Trials Completed: {trialsCompleted} / {TRIALS_PER_CONDITION}</p>
-              <p>Available Conditions: {conditions.map(c => c.name).join(', ')}</p>
-            </div>
-          ) : (
+          
+          <GameArea
+            onTrialComplete={handleTrialComplete}
+            isMirrorMode={isMirrorMode}
+            unitConverter={unitConverter}
+            isResearcherMode={userType === 'researcher'}
+            showPaths={showPaths}
+            paths={paths}
+            currentPath={currentPath}
+            onPathUpdate={setCurrentPath}
+            participantId={participantId}   
+            inputDevice={inputDevice}       
+          />
+
+          {userType === 'researcher' ? (
             <>
               <div className="mt-4">
                 <p>Participant ID: {participantId}</p>
                 <p>Input Device: {inputDevice}</p>
-                <p>Hits: {stats.hits}</p>
-                <p>Misses: {stats.misses}</p>
-                <p>Average Time: {stats.avgTime} ms</p>
-              </div>
-              {renderMetrics()}
-              <div className="flex flex-wrap justify-between mt-4 gap-2">
-                <Button onClick={() => {
-                  setIsMirrorMode(!isMirrorMode);
-                  setMessage(isMirrorMode ? 'Mirror mode disabled.' : 'Mirror mode enabled. Cursor movement is now reversed.');
-                }}>
-                  {isMirrorMode ? 'Disable' : 'Enable'} Mirror Mode
-                </Button>
-                <Button onClick={() => setShowPaths(!showPaths)}>
-                  {showPaths ? 'Hide' : 'Show'} Paths
-                </Button>
-                <Button onClick={() => {
-                  setIsDecoupledMode(!isDecoupledMode);
-                  setMessage(isDecoupledMode ? 'Coupled mode enabled.' : 'Decoupled mode enabled. Control cursor in bottom box, target in top box.');
-                }}>
-                  {isDecoupledMode ? 'Coupled' : 'Decoupled'} Mode
-                </Button>
-                <Button onClick={exportData}>Export Full Data</Button>
+                <div className="flex flex-wrap justify-between mt-4 gap-2">
+                  <Button onClick={() => setIsMirrorMode(!isMirrorMode)}>
+                    {isMirrorMode ? 'Disable' : 'Enable'} Mirror Mode
+                  </Button>
+                  <Button onClick={() => setShowPaths(!showPaths)}>
+                    {showPaths ? 'Hide' : 'Show'} Paths
+                  </Button>
+                  <Button onClick={handleExport}>Export Data</Button>
+                </div>
+                
+                {/* Data Table */}
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="p-2 text-left">Trial</th>
+                        <th className="p-2 text-left">Time (ms)</th>
+                        <th className="p-2 text-left">Target</th>
+                        <th className="p-2 text-left">Path Length (mm)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trialData.map((trial, index) => {
+                        const pathLength = trial.path.reduce((length, point, i) => {
+                          if (i === 0) return 0;
+                          const dx = point.x - trial.path[i-1].x;
+                          const dy = point.y - trial.path[i-1].y;
+                          const segmentLength = Math.sqrt(dx * dx + dy * dy);
+                          return length + unitConverter.pxToMm(segmentLength);
+                        }, 0);
+
+                        return (
+                          <tr key={index} className="border-b">
+                            <td className="p-2">{index + 1}</td>
+                            <td className="p-2">{trial.movementTime.toFixed(2)}</td>
+                            <td className="p-2">{trial.targetPosition}</td>
+                            <td className="p-2">{pathLength.toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                
+                {/* Raw data display */}
+                <div className="mt-4">
+                  <h3 className="font-bold mb-2">Latest Trial Raw Data:</h3>
+                  <div className="bg-gray-100 p-2 rounded">
+                    <pre className="whitespace-pre-wrap text-xs">
+                      {trialData.length > 0 && JSON.stringify(trialData[trialData.length - 1], null, 2)}
+                    </pre>
+                  </div>
+                </div>
               </div>
             </>
+          ) : (
+            <div className="mt-4">
+              <p>Current Condition: {conditions[currentCondition]?.name}</p>
+              <p>Trials Completed: {trialsCompleted} / {TRIALS_PER_CONDITION}</p>
+            </div>
           )}
         </CardContent>
       </Card>
