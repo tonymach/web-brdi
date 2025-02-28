@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +9,16 @@ import { ExclamationTriangleIcon } from '@radix-ui/react-icons';
 
 const ParticipantForm = ({ onSubmit, error }) => {
   const formRef = useRef(null);
+  const [isSecretLink, setIsSecretLink] = useState(false);
+  
+  useEffect(() => {
+    // Check if we're on a link with URL parameters (secret link)
+    const urlParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    
+    const hasConditionsParam = urlParams.has('conditions') || hashParams.has('conditions');
+    setIsSecretLink(hasConditionsParam);
+  }, []);
   
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -92,13 +102,13 @@ const ParticipantForm = ({ onSubmit, error }) => {
             </div>
             <div className="space-y-2">
               <Label htmlFor="userType">User Type</Label>
-              <Select name="userType" required>
+              <Select name="userType" required defaultValue="participant">
                 <SelectTrigger>
                   <SelectValue placeholder="Select user type" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="participant">Participant</SelectItem>
-                  <SelectItem value="researcher">Researcher</SelectItem>
+                  {!isSecretLink && <SelectItem value="researcher">Researcher</SelectItem>}
                 </SelectContent>
               </Select>
             </div>
